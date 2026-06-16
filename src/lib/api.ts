@@ -26,8 +26,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const getConfig = () => req<AppConfig>('/config');
 
-// Global settings only (keys + model + scraper actor).
-export const saveConfig = (patch: { keys?: AppConfig['keys']; model?: string; pinterestActor?: string }) =>
+// Global settings only (keys + model + scraper config).
+export const saveConfig = (patch: { keys?: AppConfig['keys']; model?: string; scrapeMethod?: string; proxy?: string; pinterestActor?: string }) =>
   req<AppConfig>('/config', { method: 'PUT', body: JSON.stringify(patch) });
 
 // Projects — each has its own Brain + default post-bridge accounts.

@@ -79,6 +79,8 @@ export function getConfig() {
   const cfg = {
     keys: { postbridge: '', openrouter: '', apify: '', ...s.keys },
     model: s.model || 'openai/gpt-4o-mini',
+    scrapeMethod: s.scrapeMethod || 'direct',
+    proxy: s.proxy || '',
     pinterestActor: s.pinterestActor || 'fatihtahta/pinterest-scraper-search',
     projects,
     activeProjectId,
@@ -102,12 +104,14 @@ function writeConfig(cfg) {
   return cfg
 }
 
-// Global settings only (keys + model). Project data is edited via the project ops.
+// Global settings only (keys + model + scraper config). Project data is edited via the project ops.
 export function saveGlobal(patch) {
   const c = getConfig()
   return writeConfig({
     ...c,
     model: patch.model ?? c.model,
+    scrapeMethod: patch.scrapeMethod ?? c.scrapeMethod,
+    proxy: patch.proxy ?? c.proxy,
     pinterestActor: patch.pinterestActor ?? c.pinterestActor,
     keys: { ...c.keys, ...patch.keys },
   })

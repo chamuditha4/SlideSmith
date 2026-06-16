@@ -14,6 +14,8 @@ interface SettingsViewProps {
   onSave: (patch: {
     keys?: AppConfig['keys'];
     model?: string;
+    scrapeMethod?: string;
+    proxy?: string;
     pinterestActor?: string;
     name?: string;
     defaults?: Project['defaults'];
@@ -48,6 +50,8 @@ export function SettingsView({
   const [postbridge, setPostbridge] = useState(config.keys.postbridge);
   const [openrouter, setOpenrouter] = useState(config.keys.openrouter);
   const [apify, setApify] = useState(config.keys.apify);
+  const [scrapeMethod, setScrapeMethod] = useState<'direct' | 'apify'>(config.scrapeMethod);
+  const [proxy, setProxy] = useState(config.proxy);
   const [pinterestActor, setPinterestActor] = useState(config.pinterestActor);
   const [model, setModel] = useState(config.model);
   const [name, setName] = useState(project.name);
@@ -82,6 +86,8 @@ export function SettingsView({
       await onSave({
         keys: { postbridge, openrouter, apify },
         model,
+        scrapeMethod,
+        proxy,
         pinterestActor,
         name,
         defaults: { socialAccountIds: selected, mode },
@@ -169,23 +175,49 @@ export function SettingsView({
               />
               <TestBadge ok={test?.openrouter} error={test?.errors?.openrouter} />
             </Field>
-            <Field label="Apify API key (optional)" hint="Only needed to scrape MORE Pinterest images. The bundled aesthetic packs work without it. Get one at console.apify.com.">
-              <input
-                value={apify}
-                onChange={(e) => setApify(e.target.value)}
-                placeholder="apify_api_..."
-                className={`${inputClass} font-mono`}
-              />
-              <TestBadge ok={test?.apify} error={test?.errors?.apify} />
+            <Field label="Pinterest scraping method" hint="How to source images from Pinterest when you click Scrape in the Library.">
+              <div className="flex gap-2">
+                <Button variant={scrapeMethod === 'direct' ? 'primary' : 'secondary'} onClick={() => setScrapeMethod('direct')}>
+                  Direct (with proxy)
+                </Button>
+                <Button variant={scrapeMethod === 'apify' ? 'primary' : 'secondary'} onClick={() => setScrapeMethod('apify')}>
+                  Apify actor
+                </Button>
+              </div>
             </Field>
-            <Field label="Pinterest Apify actor" hint="The Apify actor used for scraping. Change only if you prefer a different one.">
-              <input
-                value={pinterestActor}
-                onChange={(e) => setPinterestActor(e.target.value)}
-                placeholder="fatihtahta/pinterest-scraper-search"
-                className={`${inputClass} font-mono`}
-              />
-            </Field>
+            {scrapeMethod === 'direct' ? (
+              <Field
+                label="Proxy (optional)"
+                hint="HTTP CONNECT proxy for Pinterest scraping. Leave blank to scrape directly — add one if Pinterest blocks your IP. Format: http://user:pass@host:port"
+              >
+                <input
+                  value={proxy}
+                  onChange={(e) => setProxy(e.target.value)}
+                  placeholder="http://user:pass@host:port"
+                  className={`${inputClass} font-mono`}
+                />
+              </Field>
+            ) : (
+              <>
+                <Field label="Apify API key" hint="Required for the Apify actor method. Get one at console.apify.com.">
+                  <input
+                    value={apify}
+                    onChange={(e) => setApify(e.target.value)}
+                    placeholder="apify_api_..."
+                    className={`${inputClass} font-mono`}
+                  />
+                  <TestBadge ok={test?.apify} error={test?.errors?.apify} />
+                </Field>
+                <Field label="Actor" hint="The Apify actor to run. Change only if you prefer a different one.">
+                  <input
+                    value={pinterestActor}
+                    onChange={(e) => setPinterestActor(e.target.value)}
+                    placeholder="fatihtahta/pinterest-scraper-search"
+                    className={`${inputClass} font-mono`}
+                  />
+                </Field>
+              </>
+            )}
             <Field label="Model" hint={`Pick any model OpenRouter offers${models.length ? ` (${models.length} available)` : ''}.`}>
               <input
                 value={modelFilter}

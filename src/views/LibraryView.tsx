@@ -5,11 +5,7 @@ import { ViewHeader } from '../components/ViewHeader';
 import { Button } from '../components/Button';
 import { getLibrary, scrapePinterest, deleteLibraryImage } from '../lib/api';
 
-interface LibraryViewProps {
-  hasApify: boolean;
-}
-
-export function LibraryView({ hasApify }: LibraryViewProps) {
+export function LibraryView() {
   const [images, setImages] = useState<LibraryImage[] | null>(null);
   const [searches, setSearches] = useState('');
   const [count, setCount] = useState(40);
@@ -53,7 +49,7 @@ export function LibraryView({ hasApify }: LibraryViewProps) {
     <>
       <ViewHeader
         title="Library"
-        subtitle="Background images for your slides. Ships with curated aesthetic packs — scrape more from Pinterest with your own Apify key."
+        subtitle="Background images for your slides. Ships with curated aesthetic packs — scrape more directly from Pinterest."
       />
 
       <div className="flex-1 overflow-y-auto">
@@ -67,8 +63,7 @@ export function LibraryView({ hasApify }: LibraryViewProps) {
                   value={searches}
                   onChange={(e) => setSearches(e.target.value)}
                   placeholder="e.g. dark moody aesthetic, cozy bedroom, foggy mountain"
-                  disabled={!hasApify}
-                  className="w-full h-9 bg-card border border-line rounded-lg px-3 text-[13px] text-ink placeholder:text-ink-6 outline-none focus:border-ink-7 focus:ring-2 focus:ring-ink/10 disabled:opacity-50"
+                  className="w-full h-9 bg-card border border-line rounded-lg px-3 text-[13px] text-ink placeholder:text-ink-6 outline-none focus:border-ink-7 focus:ring-2 focus:ring-ink/10"
                 />
               </div>
               <div className="w-24">
@@ -76,12 +71,11 @@ export function LibraryView({ hasApify }: LibraryViewProps) {
                 <input
                   type="number"
                   value={count}
-                  min={10}
+                  min={1}
                   max={200}
                   onChange={(e) => setCount(Number(e.target.value))}
-                  onBlur={() => setCount((c) => Math.min(Math.max(c || 10, 10), 200))}
-                  disabled={!hasApify}
-                  className="w-full h-9 bg-card border border-line rounded-lg px-3 text-[13px] text-ink outline-none focus:border-ink-7 focus:ring-2 focus:ring-ink/10 disabled:opacity-50"
+                  onBlur={() => setCount((c) => Math.min(Math.max(c || 1, 1), 200))}
+                  className="w-full h-9 bg-card border border-line rounded-lg px-3 text-[13px] text-ink outline-none focus:border-ink-7 focus:ring-2 focus:ring-ink/10"
                 />
                 <span className="text-[10px] text-ink-6 mt-1 block">min 10</span>
               </div>
@@ -90,16 +84,14 @@ export function LibraryView({ hasApify }: LibraryViewProps) {
                 size="lg"
                 icon={scraping ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
                 onClick={scrape}
-                disabled={!hasApify || scraping || !searches.trim()}
+                disabled={scraping || !searches.trim()}
               >
                 {scraping ? 'Scraping…' : 'Scrape Pinterest'}
               </Button>
             </div>
-            {!hasApify && (
-              <p className="text-[12px] text-ink-5 mt-2">
-                Add your Apify API key in Settings to scrape Pinterest. The bundled packs below work without it.
-              </p>
-            )}
+            <p className="text-[12px] text-ink-5 mt-2">
+              Scrapes Pinterest directly — no third-party API needed. If you get blocked, add a proxy in Settings.
+            </p>
             {note && <p className="text-[12px] text-emerald-600 mt-2">{note}</p>}
             {error && <p className="text-[12px] text-red-600 mt-2">{error}</p>}
           </div>

@@ -142,14 +142,14 @@ app.put('/api/queue/:id', h(async (req, res) => {
   res.json(setQueue(pid, next))
 }))
 
-// ── Image library (bundled aesthetic packs + Pinterest scrapes via Apify) ────────
+// ── Image library (bundled aesthetic packs + direct Pinterest scrapes) ───────
 app.get('/api/library', h(async (_req, res) => res.json(listLibrary())))
 app.get('/api/library/packs', h(async (_req, res) => res.json(listPacks())))
 
 app.post('/api/library/scrape', h(async (req, res) => {
-  const { keys, pinterestActor } = getConfig()
+  const { scrapeMethod, proxy, pinterestActor, keys } = getConfig()
   const { searches, count } = req.body || {}
-  res.json(await scrapePinterest({ apiKey: keys.apify, actor: pinterestActor, searches, count }))
+  res.json(await scrapePinterest({ method: scrapeMethod, apiKey: keys.apify, actor: pinterestActor, proxy, searches, count }))
 }))
 
 app.delete('/api/library/:id', h(async (req, res) => res.json(removeScraped(req.params.id))))

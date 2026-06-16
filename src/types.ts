@@ -44,6 +44,8 @@ export interface Project {
 export interface AppConfig {
   keys: { postbridge: string; openrouter: string; apify: string };
   model: string;
+  scrapeMethod: 'direct' | 'apify';
+  proxy: string;
   pinterestActor: string;
   projects: Project[];
   activeProjectId: string;

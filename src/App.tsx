@@ -29,7 +29,6 @@ export default function App() {
 
   const hasOpenrouter = !!config?.keys.openrouter;
   const hasPostbridge = !!config?.keys.postbridge;
-  const hasApify = !!config?.keys.apify;
   const activeProject: Project | undefined = config?.projects.find(
     (p) => p.id === config.activeProjectId
   ) ?? config?.projects[0];
@@ -118,17 +117,19 @@ export default function App() {
     setQueue(await api.getQueue());
   };
 
-  // Global settings (keys/model) + per-project edits (name/defaults), in one call.
+  // Global settings (keys/model/scraper config) + per-project edits (name/defaults), in one call.
   const saveSettings = async (patch: {
     keys?: AppConfig['keys'];
     model?: string;
+    scrapeMethod?: string;
+    proxy?: string;
     pinterestActor?: string;
     name?: string;
     defaults?: Project['defaults'];
     imagePacks?: string[];
   }) => {
-    if (patch.keys || patch.model !== undefined || patch.pinterestActor !== undefined) {
-      await api.saveConfig({ keys: patch.keys, model: patch.model, pinterestActor: patch.pinterestActor });
+    if (patch.keys || patch.model !== undefined || patch.scrapeMethod !== undefined || patch.proxy !== undefined || patch.pinterestActor !== undefined) {
+      await api.saveConfig({ keys: patch.keys, model: patch.model, scrapeMethod: patch.scrapeMethod, proxy: patch.proxy, pinterestActor: patch.pinterestActor });
     }
     if (activeProject && (patch.name !== undefined || patch.defaults || patch.imagePacks)) {
       await api.updateProject(activeProject.id, {
@@ -210,7 +211,7 @@ export default function App() {
             onBulkSchedule={() => setBulkOpen(true)}
           />
         )}
-        {activeView === 'library' && <LibraryView hasApify={hasApify} />}
+        {activeView === 'library' && <LibraryView />}
         {activeView === 'schedule' && <ScheduleView configured={hasPostbridge} />}
         {activeView === 'results' && <ResultsView configured={hasPostbridge} />}
         {activeView === 'brain' && <BrainView brain={activeProject.brain} onChange={saveBrain} />}
