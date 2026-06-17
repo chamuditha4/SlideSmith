@@ -54,10 +54,10 @@ export function LibraryView() {
 
       <div className="flex-1 overflow-y-auto">
         {/* Scrape bar */}
-        <div className="px-8 py-4 border-b border-line bg-surface">
-          <div className="max-w-4xl mx-auto">
+        <div className="border-b border-line bg-surface">
+          <div className="px-4 py-4 sm:px-6 md:px-8">
             <div className="flex items-end gap-2 flex-wrap">
-              <div className="flex-1 min-w-[220px]">
+              <div className="flex-1 min-w-[200px]">
                 <label className="text-[11px] text-ink-5 mb-1 block">Pinterest searches</label>
                 <input
                   value={searches}
@@ -98,8 +98,8 @@ export function LibraryView() {
         </div>
 
         {/* Packs */}
-        <div className="p-8">
-          <div className="max-w-5xl mx-auto space-y-8">
+        <div className="p-4 sm:p-6 md:p-8">
+          <div className="space-y-8">
             {images === null ? (
               <div className="flex items-center justify-center py-16 text-ink-5 text-[13px] gap-2">
                 <Loader2 size={14} className="animate-spin" /> Loading library…

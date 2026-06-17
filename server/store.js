@@ -77,7 +77,8 @@ export function getConfig() {
     : projects[0].id
 
   const cfg = {
-    keys: { postbridge: '', openrouter: '', apify: '', ...s.keys },
+    keys: { postbridge: '', openrouter: '', openai: '', deepseek: '', claude: '', apify: '', ...s.keys },
+    provider: s.provider || 'openrouter',
     model: s.model || 'openai/gpt-4o-mini',
     scrapeMethod: s.scrapeMethod || 'direct',
     proxy: s.proxy || '',
@@ -109,6 +110,7 @@ export function saveGlobal(patch) {
   const c = getConfig()
   return writeConfig({
     ...c,
+    provider: patch.provider ?? c.provider,
     model: patch.model ?? c.model,
     scrapeMethod: patch.scrapeMethod ?? c.scrapeMethod,
     proxy: patch.proxy ?? c.proxy,

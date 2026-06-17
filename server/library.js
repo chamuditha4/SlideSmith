@@ -193,7 +193,12 @@ function httpsGet(url, headers, proxyUrl, timeout = 30_000) {
           res.on('data', (chunk) => chunks.push(chunk))
           res.on('end', () => {
             clearTimeout(timer)
-            resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, buffer: Buffer.concat(chunks) })
+            resolve({
+              ok: res.statusCode >= 200 && res.statusCode < 300,
+              status: res.statusCode,
+              buffer: Buffer.concat(chunks),
+              headers: res.headers,
+            })
           })
           res.on('error', (e) => { clearTimeout(timer); reject(e) })
         }
@@ -335,13 +340,23 @@ const MACOS_PLATFORM_VERSIONS = [
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)] }
 function randomHex(n) { return [...Array(n)].map(() => Math.floor(Math.random() * 16).toString(16)).join('') }
 
-// Build a randomized-but-realistic set of request headers matching what a real
-// Chrome browser sends to Pinterest's internal resource API.
-function buildPinHeaders(query) {
-  const chrome = pick(CHROME_BUILDS)
-  const macosVer = pick(MACOS_PLATFORM_VERSIONS)
-  const dpr = Math.random() > 0.6 ? '2' : '1'
-  const appVersion = randomHex(7)
+// One randomized-but-consistent "browser" per scrape. Real browsers don't
+// change UA/version mid-session, and Pinterest's guest-session cookies are
+// issued against the UA that requested them — rotating it per-request would
+// make the cookies look stolen/replayed instead of a real returning visitor.
+function buildIdentity() {
+  return {
+    chrome: pick(CHROME_BUILDS),
+    macosVer: pick(MACOS_PLATFORM_VERSIONS),
+    dpr: Math.random() > 0.6 ? '2' : '1',
+    appVersion: randomHex(7),
+  }
+}
+
+// Build request headers matching what a real Chrome browser sends to
+// Pinterest's internal resource API, for a given session identity.
+function buildPinHeaders(query, identity) {
+  const { chrome, macosVer, dpr, appVersion } = identity
 
   return {
     'accept': 'application/json, text/javascript, */*, q=0.01',
@@ -367,8 +382,10 @@ function buildPinHeaders(query) {
   }
 }
 
-// Fetch one page of results from Pinterest's internal resource API.
-async function fetchPinterestPage(query, bookmark, proxy) {
+// Fetch one page of results from Pinterest's internal resource API. There's
+// no reliable pagination bookmark for anonymous requests (see searchPins), so
+// this always fetches a single "first page" — callers de-dupe across calls.
+async function fetchPinterestPage(query, proxy, identity) {
   const sourceUrl = `/search/pins/?q=${encodeURIComponent(query)}&rs=typed`
   const options = {
     query,
@@ -386,7 +403,7 @@ async function fetchPinterestPage(query, bookmark, proxy) {
     static_feed: false,
     selected_one_bar_modules: null,
     query_pin_sigs: null,
-    page_size: bookmark ? 25 : null,
+    page_size: 25,
     price_max: null,
     price_min: null,
     query_image_pins: null,
@@ -398,7 +415,6 @@ async function fetchPinterestPage(query, bookmark, proxy) {
     filters: null,
     rs: 'typed',
     redux_normalize_feed: true,
-    ...(bookmark ? { bookmarks: [bookmark] } : {}),
   }
 
   const params = new URLSearchParams({
@@ -409,7 +425,7 @@ async function fetchPinterestPage(query, bookmark, proxy) {
 
   const res = await httpsGet(
     `https://www.pinterest.com/resource/BaseSearchResource/get/?${params}`,
-    buildPinHeaders(query),
+    buildPinHeaders(query, identity),
     proxy,
     30_000
   )
@@ -422,29 +438,83 @@ async function fetchPinterestPage(query, bookmark, proxy) {
   }
 
   const results = data?.resource_response?.data?.results || []
-  const nextBookmark = data?.resource_response?.data?.bookmarks?.[0] || null
 
   const urls = []
   for (const pin of results) {
-    if (pin?.type && pin.type !== 'pin') continue
-    const img = pin?.images?.orig ?? pin?.images?.['736x'] ?? pin?.images?.['474x'] ?? pin?.images?.['236x']
-    if (img?.url) urls.push(String(img.url).replace(/&amp;/g, '&'))
+    if (!pin || typeof pin !== 'object') continue
+    if (pin.type && pin.type !== 'pin') continue
+
+    // Tier 1: standard shape — pin.images.{orig|736x|…}
+    const imgs = pin.images
+    const img1 = imgs?.orig ?? imgs?.['736x'] ?? imgs?.['474x'] ?? imgs?.['236x']
+    if (img1?.url) { urls.push(String(img1.url).replace(/&amp;/g, '&')); continue }
+
+    // Tier 2: redux_normalize_feed shape — pin.media.images.{original|large|…}
+    const mImgs = pin.media?.images
+    const img2 = mImgs?.original ?? mImgs?.orig ?? mImgs?.large ?? mImgs?.['736x']
+    if (img2?.url) { urls.push(String(img2.url).replace(/&amp;/g, '&')); continue }
   }
 
-  return { urls, bookmark: nextBookmark === '-end-' ? null : nextBookmark }
+  // Tier 3: blob scan fallback — catches any other shape by grepping for pinimg.com URLs
+  if (urls.length === 0 && results.length > 0) {
+    const blob = JSON.stringify(results)
+    const matches = blob.match(/https?:\\?\/\\?\/[^"'\\\s]*pinimg\.com[^"'\\\s]*/gi) || []
+    const cleaned = matches
+      .map((u) => u.replace(/\\\//g, '/').replace(/&amp;/g, '&'))
+      .filter((u) => /\.(jpe?g|png|webp)/i.test(u))
+    const originals = cleaned.filter((u) => /\/originals\//i.test(u))
+    const byName = new Map()
+    for (const u of [...originals, ...cleaned]) {
+      const name = u.split('/').pop()
+      if (name && !byName.has(name)) byName.set(name, u)
+    }
+    urls.push(...byName.values())
+  }
+
+  return urls
 }
 
 // Collect up to `limit` image URLs for a single search query.
-async function searchPins(query, limit, proxy) {
+// Pinterest's anonymous search API caps every request at one throttled page
+// and never hands back a usable pagination bookmark (confirmed: even with a
+// bootstrapped guest-session cookie it got worse, returning 0 results — the
+// cookie-issuing visit itself reads as bot traffic and taints the session).
+// So instead of chasing real pagination, fire several independent "first
+// page" requests for the same query and de-dupe — Pinterest's anonymous feed
+// isn't perfectly deterministic between calls, so repeats turn up enough new
+// images to approximate pagination.
+async function searchPins(query, limit, proxy, identity) {
   const collected = []
-  let bookmark = null
+  const seen = new Set()
+  const MAX_ATTEMPTS = 6
+  let consecutiveEmpty = 0
 
-  while (collected.length < limit) {
-    const { urls, bookmark: next } = await fetchPinterestPage(query, bookmark, proxy)
-    collected.push(...urls)
-    bookmark = next
-    if (!bookmark || !urls.length) break
-    if (collected.length < limit) await new Promise((r) => setTimeout(r, 300))
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS && collected.length < limit; attempt++) {
+    let urls
+    try {
+      urls = await fetchPinterestPage(query, proxy, identity)
+    } catch (e) {
+      if (attempt === MAX_ATTEMPTS) throw e
+      log.info(`"${query}" request failed (${attempt}/${MAX_ATTEMPTS}): ${e.message} — retrying…`)
+      await new Promise((r) => setTimeout(r, 800 * attempt))
+      continue
+    }
+
+    let added = 0
+    for (const url of urls) {
+      const name = url.split('/').pop()?.split('?')[0]
+      if (name && !seen.has(name)) {
+        seen.add(name)
+        collected.push(url)
+        added++
+      }
+    }
+
+    consecutiveEmpty = added === 0 ? consecutiveEmpty + 1 : 0
+    // Two attempts in a row with nothing new — Pinterest is giving us the
+    // same throttled set every time, so further attempts won't help.
+    if (consecutiveEmpty >= 2) break
+    if (collected.length < limit) await new Promise((r) => setTimeout(r, 500))
   }
 
   return collected.slice(0, limit)
@@ -460,11 +530,13 @@ async function scrapeDirect({ searches, count, proxy }) {
   log.start(`Scraping Pinterest directly → "${pack}" (up to ${limit})`)
   if (proxy) log.step('routing through proxy')
 
+  const identity = buildIdentity()
+
   const perQuery = Math.ceil(limit / queries.length)
   const allUrls = []
   for (const query of queries) {
     log.step(`searching "${query}"…`)
-    const found = await searchPins(query, perQuery, proxy)
+    const found = await searchPins(query, perQuery, proxy, identity)
     log.info(`"${query}" → ${found.length} image${found.length === 1 ? '' : 's'}`)
     allUrls.push(...found)
   }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { LayoutGrid, CalendarClock, LineChart, Brain, Settings, ChevronsUpDown, Plus, Check, Images } from 'lucide-react';
+import { LayoutGrid, CalendarClock, LineChart, Brain, Settings, ChevronsUpDown, Plus, Check, Images, X } from 'lucide-react';
 import type { ViewKey, Project } from '../types';
 
 interface SidebarProps {
@@ -11,6 +11,8 @@ interface SidebarProps {
   activeProjectId: string;
   onSwitchProject: (id: string) => void;
   onNewProject: () => void;
+  isOpen?: boolean;
+  onClose?: () => void;
 }
 
 const nav: { key: ViewKey; label: string; icon: typeof LayoutGrid; badge?: 'queue' | 'scheduled' }[] = [
@@ -34,20 +36,27 @@ export function Sidebar({
   activeProjectId,
   onSwitchProject,
   onNewProject,
+  isOpen = false,
+  onClose,
 }: SidebarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const active = projects.find((p) => p.id === activeProjectId) ?? projects[0];
 
   return (
-    <aside className="w-[220px] shrink-0 flex flex-col bg-bg border-r border-line h-full">
+    <aside className={`fixed inset-y-0 left-0 z-30 w-[220px] shrink-0 flex flex-col bg-bg border-r border-line h-full transition-transform duration-200 md:relative md:translate-x-0 ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
       {/* Brand */}
       <div className="px-4 py-4 border-b border-line">
         <div className="flex items-center gap-2.5">
           <img src="/android-chrome-192x192.png" alt="Slidesmith" className="w-7 h-7 rounded-[7px] shrink-0" />
-          <div className="flex flex-col leading-none">
+          <div className="flex flex-col leading-none flex-1">
             <span className="text-[14px] font-semibold text-ink">Slidesmith</span>
             <span className="text-[11px] text-ink-5 mt-0.5">Open Source Generator</span>
           </div>
+          {onClose && (
+            <button onClick={onClose} className="md:hidden text-ink-5 hover:text-ink ml-auto">
+              <X size={16} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -109,7 +118,7 @@ export function Sidebar({
             return (
               <button
                 key={key}
-                onClick={() => onSelectView(key)}
+                onClick={() => { onSelectView(key); onClose?.(); }}
                 className={`w-full h-9 flex items-center gap-2.5 rounded-lg px-2 text-left border border-transparent transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ink/10 ${
                   isActive ? 'bg-raised text-ink' : 'text-ink-4 hover:bg-raised hover:text-ink-3'
                 }`}
@@ -132,7 +141,7 @@ export function Sidebar({
       {/* Bottom */}
       <div className="border-t border-line p-2">
         <button
-          onClick={() => onSelectView('settings')}
+          onClick={() => { onSelectView('settings'); onClose?.(); }}
           className={`w-full h-9 flex items-center gap-2.5 rounded-lg px-2 border border-transparent transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ink/10 ${
             activeView === 'settings' ? 'bg-raised text-ink' : 'text-ink-6 hover:text-ink-4 hover:bg-raised'
           }`}

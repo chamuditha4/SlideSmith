@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Check, X, Loader2, KeyRound, Trash2, Info } from 'lucide-react';
-import type { AppConfig, Project, SocialAccount, ModelOption } from '../types';
+import { Check, X, Loader2, KeyRound, Trash2, Info, Download } from 'lucide-react';
+import type { AppConfig, AiProvider, Project, SocialAccount, ModelOption } from '../types';
 import { ViewHeader } from '../components/ViewHeader';
 import { Button } from '../components/Button';
 import { testKeys, getModels } from '../lib/api';
@@ -13,6 +13,7 @@ interface SettingsViewProps {
   canDelete: boolean;
   onSave: (patch: {
     keys?: AppConfig['keys'];
+    provider?: AiProvider;
     model?: string;
     scrapeMethod?: string;
     proxy?: string;
@@ -33,6 +34,13 @@ const PostBridgeLink = ({ children }: { children: React.ReactNode }) => (
   </a>
 );
 
+const PROVIDER_DEFAULT_MODELS: Record<AiProvider, string> = {
+  openrouter: 'openai/gpt-4o-mini',
+  openai:     'gpt-4o-mini',
+  deepseek:   'deepseek-chat',
+  claude:     'claude-sonnet-4-6',
+};
+
 const inputClass =
   'w-full h-9 bg-card border border-line rounded-lg px-3 text-[13px] text-ink ' +
   'placeholder:text-ink-6 outline-none transition-colors ' +
@@ -48,7 +56,11 @@ export function SettingsView({
   onReloadAccounts,
 }: SettingsViewProps) {
   const [postbridge, setPostbridge] = useState(config.keys.postbridge);
+  const [provider, setProvider] = useState<AiProvider>(config.provider ?? 'openrouter');
   const [openrouter, setOpenrouter] = useState(config.keys.openrouter);
+  const [openai, setOpenai] = useState(config.keys.openai ?? '');
+  const [deepseek, setDeepseek] = useState(config.keys.deepseek ?? '');
+  const [claude, setClaude] = useState(config.keys.claude ?? '');
   const [apify, setApify] = useState(config.keys.apify);
   const [scrapeMethod, setScrapeMethod] = useState<'direct' | 'apify'>(config.scrapeMethod);
   const [proxy, setProxy] = useState(config.proxy);
@@ -64,7 +76,7 @@ export function SettingsView({
   const [testing, setTesting] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [test, setTest] = useState<{ postbridge: boolean; openrouter: boolean; apify: boolean; errors: Record<string, string> } | null>(null);
+  const [test, setTest] = useState<{ postbridge: boolean; ai: boolean; apify: boolean; errors: Record<string, string> } | null>(null);
 
   // Re-sync editable fields when the active project changes (switching projects).
   useEffect(() => {
@@ -75,8 +87,9 @@ export function SettingsView({
   }, [project.id, project.name, project.defaults.mode, project.defaults.socialAccountIds, project.imagePacks]);
 
   useEffect(() => {
-    getModels().then(setModels).catch(() => setModels([]));
-  }, []);
+    setModels([]);
+    getModels(provider).then(setModels).catch(() => setModels([]));
+  }, [provider]);
 
   const save = async () => {
     setSaving(true);
@@ -84,7 +97,8 @@ export function SettingsView({
     setSaveError(null);
     try {
       await onSave({
-        keys: { postbridge, openrouter, apify },
+        keys: { postbridge, openrouter, openai, deepseek, claude, apify },
+        provider,
         model,
         scrapeMethod,
         proxy,
@@ -133,7 +147,7 @@ export function SettingsView({
       />
 
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-2xl mx-auto p-8 space-y-8">
+        <div className="max-w-2xl mx-auto p-4 sm:p-6 md:p-8 space-y-8">
           {/* Project */}
           <Section
             title="Project"
@@ -154,9 +168,10 @@ export function SettingsView({
             title="API keys"
             description="Shared across all projects. Stored in ~/.slidesmith/config.json on your computer."
           >
+            <LocalModeNote />
             <Field
-              label="post-bridge API key"
-              hint={<>Handles scheduling, posting &amp; analytics. Get one at <PostBridgeLink>post-bridge.com</PostBridgeLink>.</>}
+              label={<>post-bridge API key <span className="text-ink-6 font-normal normal-case tracking-normal">(optional)</span></>}
+              hint={<>Cloud scheduling, multi-platform posting &amp; analytics. Leave blank to use local download mode. Get one at <PostBridgeLink>post-bridge.com</PostBridgeLink>.</>}
             >
               <input
                 value={postbridge}
@@ -166,15 +181,69 @@ export function SettingsView({
               />
               <TestBadge ok={test?.postbridge} error={test?.errors?.postbridge} />
             </Field>
-            <Field label="OpenRouter API key" hint="Runs the AI that writes your slideshows — one key, any model. Get one at openrouter.ai/keys.">
-              <input
-                value={openrouter}
-                onChange={(e) => setOpenrouter(e.target.value)}
-                placeholder="sk-or-..."
-                className={`${inputClass} font-mono`}
-              />
-              <TestBadge ok={test?.openrouter} error={test?.errors?.openrouter} />
+
+            <Field label="AI provider" hint="Which service runs the AI that writes your slideshows. Your keys for all providers are saved — switching just changes which one is active.">
+              <div className="flex gap-2 flex-wrap">
+                {(['openrouter', 'openai', 'deepseek', 'claude'] as AiProvider[]).map((p) => (
+                  <Button
+                    key={p}
+                    variant={provider === p ? 'primary' : 'secondary'}
+                    onClick={() => {
+                      setProvider(p);
+                      setModelFilter('');
+                      setModel(PROVIDER_DEFAULT_MODELS[p]);
+                    }}
+                  >
+                    {{ openrouter: 'OpenRouter', openai: 'OpenAI', deepseek: 'DeepSeek', claude: 'Claude' }[p]}
+                  </Button>
+                ))}
+              </div>
             </Field>
+
+            {provider === 'openrouter' && (
+              <Field label="OpenRouter API key" hint="One key for any model — 300+ models available. Get one at openrouter.ai/keys.">
+                <input
+                  value={openrouter}
+                  onChange={(e) => setOpenrouter(e.target.value)}
+                  placeholder="sk-or-..."
+                  className={`${inputClass} font-mono`}
+                />
+                <TestBadge ok={test?.ai} error={test?.errors?.ai} />
+              </Field>
+            )}
+            {provider === 'openai' && (
+              <Field label="OpenAI API key" hint="Use GPT-4o, o1, and other OpenAI models. Get one at platform.openai.com/api-keys.">
+                <input
+                  value={openai}
+                  onChange={(e) => setOpenai(e.target.value)}
+                  placeholder="sk-..."
+                  className={`${inputClass} font-mono`}
+                />
+                <TestBadge ok={test?.ai} error={test?.errors?.ai} />
+              </Field>
+            )}
+            {provider === 'deepseek' && (
+              <Field label="DeepSeek API key" hint="Use DeepSeek Chat (V3) or Reasoner (R1). Get one at platform.deepseek.com.">
+                <input
+                  value={deepseek}
+                  onChange={(e) => setDeepseek(e.target.value)}
+                  placeholder="sk-..."
+                  className={`${inputClass} font-mono`}
+                />
+                <TestBadge ok={test?.ai} error={test?.errors?.ai} />
+              </Field>
+            )}
+            {provider === 'claude' && (
+              <Field label="Anthropic API key" hint="Use Claude Opus, Sonnet, or Haiku. Get one at console.anthropic.com/settings/keys.">
+                <input
+                  value={claude}
+                  onChange={(e) => setClaude(e.target.value)}
+                  placeholder="sk-ant-..."
+                  className={`${inputClass} font-mono`}
+                />
+                <TestBadge ok={test?.ai} error={test?.errors?.ai} />
+              </Field>
+            )}
             <Field label="Pinterest scraping method" hint="How to source images from Pinterest when you click Scrape in the Library.">
               <div className="flex gap-2">
                 <Button variant={scrapeMethod === 'direct' ? 'primary' : 'secondary'} onClick={() => setScrapeMethod('direct')}>
@@ -218,13 +287,19 @@ export function SettingsView({
                 </Field>
               </>
             )}
-            <Field label="Model" hint={`Pick any model OpenRouter offers${models.length ? ` (${models.length} available)` : ''}.`}>
-              <input
-                value={modelFilter}
-                onChange={(e) => setModelFilter(e.target.value)}
-                placeholder="Filter models… e.g. claude, gpt, llama"
-                className={`${inputClass} mb-2`}
-              />
+            <Field label="Model" hint={
+              provider === 'openrouter'
+                ? `Pick any model OpenRouter offers${models.length ? ` (${models.length} available)` : ''}.`
+                : `Pick a ${{ openai: 'OpenAI', deepseek: 'DeepSeek', claude: 'Claude' }[provider]} model.`
+            }>
+              {provider === 'openrouter' && (
+                <input
+                  value={modelFilter}
+                  onChange={(e) => setModelFilter(e.target.value)}
+                  placeholder="Filter models… e.g. claude, gpt, llama"
+                  className={`${inputClass} mb-2`}
+                />
+              )}
               <select value={model} onChange={(e) => setModel(e.target.value)} className={inputClass}>
                 {model && !filtered.some((m) => m.id === model) && <option value={model}>{model}</option>}
                 {filtered.map((m) => (
@@ -239,12 +314,13 @@ export function SettingsView({
           {/* Posting defaults (per project) */}
           <Section
             title="Posting defaults"
-            description="Which connected accounts this project posts to, and whether to schedule directly or save as a draft in post-bridge."
+            description="Default mode when approving a slideshow. Requires a post-bridge key for scheduling/drafts — otherwise Download locally is used."
           >
             {accounts.length === 0 ? (
               <p className="text-[12px] text-ink-5">
-                No connected accounts yet. Add your post-bridge key above, hit Test, then connect
-                accounts at <PostBridgeLink>post-bridge.com</PostBridgeLink> — they'll appear here.
+                No post-bridge accounts connected. Add your key above and connect accounts at{' '}
+                <PostBridgeLink>post-bridge.com</PostBridgeLink> — or leave it blank and use{' '}
+                <strong className="text-ink-4">Download locally</strong> to save PNGs and upload yourself.
               </p>
             ) : (
               <div className="flex flex-col gap-1.5">
@@ -318,10 +394,11 @@ export function DraftNote() {
     <div className="flex items-start gap-2 p-3 rounded-lg bg-surface border border-line">
       <Info size={13} className="text-ink-5 mt-0.5 shrink-0" />
       <p className="text-[12px] text-ink-4 leading-snug">
-        <span className="font-medium text-ink-3">Drafts vs. scheduling:</span> drafts land in your
-        post-bridge inbox to post by hand. You won't get analytics back on drafts — TikTok only
-        reports on content it publishes itself — but posting manually avoids automation detection,
-        so reach potential is often higher. Scheduling posts automatically and does report analytics.
+        <span className="font-medium text-ink-3">Drafts vs. scheduling vs. local:</span> drafts land in your
+        post-bridge inbox to post by hand. Scheduling posts automatically and reports analytics.{' '}
+        <span className="font-medium text-ink-3">Download locally</span> skips post-bridge entirely — slides are saved
+        as PNGs to <span className="font-mono text-ink-3">~/Downloads/slidesmith/</span> for you to upload manually.
+        Manual posting avoids automation detection, so reach potential is often higher.
       </p>
     </div>
   );
@@ -352,12 +429,26 @@ function Section({ title, description, children }: { title: string; description:
   );
 }
 
-function Field({ label, hint, children }: { label: string; hint?: React.ReactNode; children: React.ReactNode }) {
+function Field({ label, hint, children }: { label: React.ReactNode; hint?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div>
       <label className="text-[11px] text-ink-5 mb-1 block">{label}</label>
       {children}
       {hint && <p className="text-[11px] text-ink-6 mt-1">{hint}</p>}
+    </div>
+  );
+}
+
+function LocalModeNote() {
+  return (
+    <div className="flex items-start gap-2 p-3 rounded-lg bg-surface border border-line">
+      <Download size={13} className="text-ink-5 mt-0.5 shrink-0" />
+      <p className="text-[12px] text-ink-4 leading-snug">
+        <span className="font-medium text-ink-3">No post-bridge key? No problem.</span> Slidesmith
+        works without one — approve any slideshow and choose{' '}
+        <span className="font-medium text-ink-3">Download locally</span> to save the rendered PNGs
+        to <span className="font-mono text-ink-3">~/Downloads/slidesmith/</span> and upload them yourself.
+      </p>
     </div>
   );
 }

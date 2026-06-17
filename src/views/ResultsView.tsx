@@ -64,8 +64,8 @@ export function ResultsView({ configured }: ResultsViewProps) {
       />
       <div className="flex-1 overflow-y-auto">
         {results && results.length > 0 && (
-          <div className="px-8 py-4 border-b border-line bg-surface">
-            <div className="max-w-4xl mx-auto grid grid-cols-3 gap-6">
+          <div className="border-b border-line bg-surface">
+            <div className="px-4 py-4 sm:px-6 md:px-8 grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
               <Stat label="Total views" value={formatNumber(totalViews)} />
               <Stat label="Total likes" value={formatNumber(totalLikes)} />
               <Stat label="Posts tracked" value={String(results.length)} />
@@ -73,8 +73,8 @@ export function ResultsView({ configured }: ResultsViewProps) {
           </div>
         )}
 
-        <div className="p-8">
-          <div className="max-w-4xl mx-auto flex flex-col gap-3">
+        <div className="p-4 sm:p-6 md:p-8">
+          <div className="flex flex-col gap-3">
             {!configured ? (
               <Empty text="Add your post-bridge API key in Settings to see analytics." />
             ) : error ? (
@@ -104,7 +104,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 function ResultCard({ result }: { result: PostResult }) {
   return (
-    <div className="bg-card border border-line rounded-xl p-4 flex gap-4">
+    <div className="bg-card border border-line rounded-xl p-4 flex gap-3 sm:gap-4">
       <div className="shrink-0 w-20 aspect-[9/16] rounded-md overflow-hidden bg-raised">
         {result.coverImageUrl && (
           <img src={result.coverImageUrl} alt="" className="w-full h-full object-cover" />

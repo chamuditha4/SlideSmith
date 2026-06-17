@@ -25,10 +25,10 @@ export function BrainView({ brain, onChange }: BrainViewProps) {
       />
 
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto p-8 space-y-8">
+        <div className="max-w-3xl mx-auto p-4 sm:p-6 md:p-8 space-y-8">
           {/* Niche & app */}
           <Section title="Account context" description="Rarely changes. Defines who the AI is writing for.">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Niche">
                 <input
                   value={brain.niche}

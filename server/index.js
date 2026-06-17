@@ -21,7 +21,7 @@ import {
 } from './store.js'
 import { listAccounts, listPosts, listAnalytics, syncAnalytics, uploadMedia, createPost } from './postbridge.js'
 import { generateSlideshows } from './generate.js'
-import { listModels, validateKey } from './openrouter.js'
+import { listModels, validateKey } from './providers.js'
 import { listLibrary, listPacks, scrapePinterest, removeScraped, getScrapedFile } from './library.js'
 import { logger } from './log.js'
 
@@ -66,15 +66,16 @@ app.post('/api/projects/:id/activate', h(async (req, res) => res.json(setActiveP
 
 // Validate that the saved keys actually work, so Settings can show a green check.
 app.post('/api/config/test', h(async (_req, res) => {
-  const { keys } = getConfig()
-  const result = { postbridge: false, openrouter: false, apify: false, errors: {} }
+  const { keys, provider } = getConfig()
+  const result = { postbridge: false, ai: false, apify: false, errors: {} }
   if (keys.postbridge) {
     try { await listAccounts(keys.postbridge); result.postbridge = true }
     catch (e) { result.errors.postbridge = e.message }
   }
-  if (keys.openrouter) {
-    try { await validateKey(keys.openrouter); result.openrouter = true }
-    catch (e) { result.errors.openrouter = e.message }
+  const activeKey = keys[provider] || ''
+  if (activeKey) {
+    try { await validateKey(activeKey, provider); result.ai = true }
+    catch (e) { result.errors.ai = e.message }
   }
   if (keys.apify) {
     try {
@@ -86,8 +87,11 @@ app.post('/api/config/test', h(async (_req, res) => {
   res.json(result)
 }))
 
-// Public model catalog for the Settings dropdown.
-app.get('/api/models', h(async (_req, res) => res.json(await listModels())))
+// Model catalog for the Settings dropdown. Pass ?provider= to get the right list.
+app.get('/api/models', h(async (req, res) => {
+  const provider = req.query.provider || 'openrouter'
+  res.json(await listModels(provider))
+}))
 
 // ── Queue (generated drafts for the active project, before post-bridge) ───────
 app.get('/api/queue', h(async (_req, res) => {
@@ -96,10 +100,11 @@ app.get('/api/queue', h(async (_req, res) => {
 }))
 
 app.post('/api/generate', h(async (req, res) => {
-  const { keys, model } = getConfig()
+  const { keys, model, provider } = getConfig()
   const project = getActiveProject()
   const count = Math.min(Math.max(Math.round(Number(req.body?.count) || 4), 1), 100)
-  const slideshows = await generateSlideshows({ apiKey: keys.openrouter, model, brain: project.brain, count })
+  const apiKey = keys[provider] || ''
+  const slideshows = await generateSlideshows({ apiKey, model, brain: project.brain, provider, count })
 
   // Auto-assign background images. A per-batch `packs` override (from the
   // Generate modal) wins; otherwise fall back to the project's saved packs.
@@ -228,6 +233,7 @@ app.post('/api/schedule', h(async (req, res) => {
   schedLog.ok(`Done — ${mode === 'schedule' ? 'scheduled' : 'saved as draft'}`)
   res.json(post)
 }))
+
 
 // ── Static (production / `npm start`) ─────────────────────────────────────────
 const dist = join(__dirname, '..', 'dist')

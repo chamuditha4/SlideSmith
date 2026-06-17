@@ -2,7 +2,7 @@
 // reference patterns), the chosen model writes N carousel slideshows: a hook,
 // caption, hashtags, a rationale, and the per-slide text. Images are rendered
 // later, client-side — the model only writes the words.
-import { chatJSON } from './openrouter.js'
+import { chatJSON } from './providers.js'
 import { logger } from './log.js'
 
 const log = logger('generate')
@@ -48,7 +48,7 @@ Keep them on-brand, varied, and genuinely good. Do not write generic filler. Ret
 // truncate the JSON. Each call asks for a handful; we loop until we hit `count`.
 const BATCH = 6
 
-export async function generateSlideshows({ apiKey, model, brain, count = 4 }) {
+export async function generateSlideshows({ apiKey, model, brain, provider = 'openrouter', count = 4 }) {
   log.start(`Generating ${count} slideshow${count === 1 ? '' : 's'} with ${model}`)
   if (brain?.niche) log.info(`niche: ${brain.niche}${brain.appName ? ` · ${brain.appName}` : ''}`)
   const raw = []
@@ -57,7 +57,7 @@ export async function generateSlideshows({ apiKey, model, brain, count = 4 }) {
     safety++
     const n = Math.min(BATCH, count - raw.length)
     log.step(`asking model for ${n} more (${raw.length}/${count} so far)…`)
-    const parsed = await chatJSON({ apiKey, model, prompt: buildPrompt(brain, n) })
+    const parsed = await chatJSON({ apiKey, model, prompt: buildPrompt(brain, n), provider })
     const batch = parsed.slideshows || []
     if (!batch.length) {
       log.warn('model returned no slideshows — stopping early')

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { X, Loader2, CalendarClock, CheckCircle2, ExternalLink } from 'lucide-react';
+import { X, Loader2, CalendarClock, CheckCircle2, ExternalLink, Download } from 'lucide-react';
 import type { Slideshow, SocialAccount, ProjectDefaults } from '../types';
 import { Button } from './Button';
 import { renderSlideshow } from '../lib/render';
 import { schedule as scheduleOne, getScheduledPosts } from '../lib/api';
+import { downloadZip, slideshowTextFiles } from '../lib/zip';
 
 // post-bridge dashboard — where the user reviews what we just sent over.
 const PB_SCHEDULED_URL = 'https://www.post-bridge.com/dashboard/posts/scheduled';
@@ -13,6 +14,7 @@ interface BulkScheduleModalProps {
   slideshows: Slideshow[];
   accounts: SocialAccount[];
   defaults: ProjectDefaults;
+  hasPostbridge: boolean;
   onClose: () => void;
   onDone: () => void;
 }
@@ -24,9 +26,9 @@ function toLocalInput(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export function BulkScheduleModal({ slideshows, accounts, defaults, onClose, onDone }: BulkScheduleModalProps) {
+export function BulkScheduleModal({ slideshows, accounts, defaults, hasPostbridge, onClose, onDone }: BulkScheduleModalProps) {
   const [selectedAccounts, setSelectedAccounts] = useState<number[]>(defaults.socialAccountIds);
-  const [mode, setMode] = useState<'schedule' | 'draft'>(defaults.mode === 'draft' ? 'draft' : 'schedule');
+  const [mode, setMode] = useState<'schedule' | 'draft' | 'download'>(!hasPostbridge ? 'download' : defaults.mode === 'draft' ? 'draft' : 'schedule');
   const [hours, setHours] = useState(6);
   const [startLocal, setStartLocal] = useState(() => toLocalInput(new Date(Date.now() + 6 * 3600_000)));
   const [lastScheduledMs, setLastScheduledMs] = useState<number | null>(null);
@@ -36,6 +38,7 @@ export function BulkScheduleModal({ slideshows, accounts, defaults, onClose, onD
 
   // Default the start time to AFTER the last thing already scheduled in post-bridge.
   useEffect(() => {
+    if (!hasPostbridge) return;
     getScheduledPosts()
       .then((posts) => {
         const future = posts
@@ -47,7 +50,7 @@ export function BulkScheduleModal({ slideshows, accounts, defaults, onClose, onD
         setStartLocal(toLocalInput(new Date(base + 6 * 3600_000)));
       })
       .catch(() => {});
-  }, []);
+  }, [hasPostbridge]);
 
   const resetStartAfterLast = (h: number) => {
     const base = lastScheduledMs ?? Date.now();
@@ -65,23 +68,40 @@ export function BulkScheduleModal({ slideshows, accounts, defaults, onClose, onD
 
   const submit = async () => {
     setError(null);
-    if (!selectedAccounts.length) return setError('Pick at least one account.');
+    if (mode !== 'download' && !selectedAccounts.length) return setError('Pick at least one account.');
     if (mode === 'schedule') {
       const start = new Date(startLocal).getTime();
       if (Number.isNaN(start)) return setError('Pick a valid start time.');
       if (start < Date.now() - 60_000) return setError('Start time is in the past.');
     }
+
+    if (mode === 'download') {
+      setProgress({ done: 0, total: slideshows.length });
+      const allFiles: { name: string; data: string }[] = [];
+      let ok = 0;
+      for (let i = 0; i < slideshows.length; i++) {
+        try {
+          const rendered = await renderSlideshow(slideshows[i]);
+          const prefix = `slideshow-${i + 1}/`;
+          rendered.forEach((data, j) => {
+            allFiles.push({ name: `${prefix}slide-${j + 1}.png`, data, binary: true as const });
+          });
+          allFiles.push(...slideshowTextFiles(slideshows[i], prefix));
+          ok++;
+        } catch (e) {
+          console.error('[bulk-download] failed for', slideshows[i].id, e);
+        }
+        setProgress({ done: i + 1, total: slideshows.length });
+      }
+      if (allFiles.length) await downloadZip('slideshows.zip', allFiles);
+      setDoneCount(ok);
+      return;
+    }
+
     const startMs = new Date(startLocal).getTime();
     const stepMs = hours * 3600_000;
     setProgress({ done: 0, total: slideshows.length });
 
-    // Process several slideshows at once instead of one-at-a-time — each is an
-    // independent render + upload, so a small pool cuts wall-clock dramatically
-    // for big batches. Each post keeps its own slot time (index i), so running
-    // out of order doesn't change the schedule.
-    // Each slideshow already fans out its slide uploads in parallel, so keep the
-    // slideshow-level pool modest — too many at once overwhelms post-bridge's
-    // upload endpoint and starts dropping slides.
     const CONCURRENCY = 3;
     let ok = 0;
     let done = 0;
@@ -127,45 +147,61 @@ export function BulkScheduleModal({ slideshows, accounts, defaults, onClose, onD
         {doneCount !== null ? (
           <div className="px-5 py-8 text-center space-y-2">
             <CheckCircle2 size={28} className="text-emerald-600 mx-auto" />
-            <p className="text-[14px] font-medium text-ink">{doneCount} of {slideshows.length} {mode === 'schedule' ? 'scheduled' : 'saved as drafts'}</p>
-            <p className="text-[12px] text-ink-5">
-              {mode === 'schedule' ? 'post-bridge will publish them at their times.' : 'Find them in your post-bridge drafts.'}
+            <p className="text-[14px] font-medium text-ink">
+              {doneCount} of {slideshows.length}{' '}
+              {mode === 'download' ? 'downloaded' : mode === 'schedule' ? 'scheduled' : 'saved as drafts'}
             </p>
-            <a
-              href={mode === 'schedule' ? PB_SCHEDULED_URL : PB_DRAFTS_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center justify-center gap-1.5 h-9 px-4 mt-2 rounded-lg bg-ink text-bg text-[13px] font-medium hover:opacity-90"
-            >
-              View on post-bridge <ExternalLink size={13} />
-            </a>
+            <p className="text-[12px] text-ink-5">
+              {mode === 'download'
+                ? 'slideshows.zip downloaded — open it and upload each folder\'s slides to your platforms.'
+                : mode === 'schedule'
+                ? 'post-bridge will publish them at their times.'
+                : 'Find them in your post-bridge drafts.'}
+            </p>
+            {mode !== 'download' && (
+              <a
+                href={mode === 'schedule' ? PB_SCHEDULED_URL : PB_DRAFTS_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center justify-center gap-1.5 h-9 px-4 mt-2 rounded-lg bg-ink text-bg text-[13px] font-medium hover:opacity-90"
+              >
+                View on post-bridge <ExternalLink size={13} />
+              </a>
+            )}
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
-            {/* Accounts */}
-            <div>
-              <label className="text-[11px] text-ink-5 uppercase tracking-widest font-semibold mb-1.5 block">Post to</label>
-              {accounts.length === 0 ? (
-                <p className="text-[12px] text-ink-5">No connected accounts. Add your post-bridge key and connect accounts in Settings.</p>
-              ) : (
-                <div className="flex flex-col gap-1.5">
-                  {accounts.map((a) => (
-                    <label key={a.id} className="flex items-center gap-2.5 px-3 py-2 rounded-lg border border-line cursor-pointer hover:border-line-2">
-                      <input type="checkbox" checked={selectedAccounts.includes(a.id)} onChange={() => toggleAccount(a.id)} disabled={busy} />
-                      <span className="text-[13px] text-ink font-medium">{a.username}</span>
-                      <span className="text-[11px] text-ink-5 uppercase">{a.platform}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* Accounts — only relevant when posting via post-bridge */}
+            {mode !== 'download' && (
+              <div>
+                <label className="text-[11px] text-ink-5 uppercase tracking-widest font-semibold mb-1.5 block">Post to</label>
+                {accounts.length === 0 ? (
+                  <p className="text-[12px] text-ink-5">No connected accounts. Add your post-bridge key and connect accounts in Settings.</p>
+                ) : (
+                  <div className="flex flex-col gap-1.5">
+                    {accounts.map((a) => (
+                      <label key={a.id} className="flex items-center gap-2.5 px-3 py-2 rounded-lg border border-line cursor-pointer hover:border-line-2">
+                        <input type="checkbox" checked={selectedAccounts.includes(a.id)} onChange={() => toggleAccount(a.id)} disabled={busy} />
+                        <span className="text-[13px] text-ink font-medium">{a.username}</span>
+                        <span className="text-[11px] text-ink-5 uppercase">{a.platform}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Mode */}
             <div>
-              <label className="text-[11px] text-ink-5 uppercase tracking-widest font-semibold mb-1.5 block">When</label>
-              <div className="flex gap-2">
-                <Button variant={mode === 'schedule' ? 'primary' : 'secondary'} onClick={() => setMode('schedule')} disabled={busy}>Schedule</Button>
-                <Button variant={mode === 'draft' ? 'primary' : 'secondary'} onClick={() => setMode('draft')} disabled={busy}>Save all as drafts</Button>
+              <label className="text-[11px] text-ink-5 uppercase tracking-widest font-semibold mb-1.5 block">What to do</label>
+              <div className="flex gap-2 flex-wrap">
+                <Button variant={mode === 'download' ? 'primary' : 'secondary'} icon={<Download size={13} />} onClick={() => setMode('download')} disabled={busy}>Download locally</Button>
+                {hasPostbridge && (
+                  <>
+                    <Button variant={mode === 'schedule' ? 'primary' : 'secondary'} onClick={() => setMode('schedule')} disabled={busy}>Schedule</Button>
+                    <Button variant={mode === 'draft' ? 'primary' : 'secondary'} onClick={() => setMode('draft')} disabled={busy}>Save all as drafts</Button>
+                  </>
+                )}
               </div>
             </div>
 
@@ -212,7 +248,12 @@ export function BulkScheduleModal({ slideshows, accounts, defaults, onClose, onD
             )}
 
             {error && <p className="text-[12px] text-red-600">{error}</p>}
-            {progress && <p className="text-[12px] text-ink-5 flex items-center gap-2"><Loader2 size={13} className="animate-spin" /> Uploading {progress.done} / {progress.total}…</p>}
+            {progress && (
+              <p className="text-[12px] text-ink-5 flex items-center gap-2">
+                <Loader2 size={13} className="animate-spin" />
+                {mode === 'download' ? 'Rendering' : 'Uploading'} {progress.done} / {progress.total}…
+              </p>
+            )}
           </div>
         )}
 
@@ -224,11 +265,15 @@ export function BulkScheduleModal({ slideshows, accounts, defaults, onClose, onD
               <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
               <Button
                 variant="primary"
-                icon={busy ? <Loader2 size={13} className="animate-spin" /> : <CalendarClock size={13} />}
+                icon={busy ? <Loader2 size={13} className="animate-spin" /> : mode === 'download' ? <Download size={13} /> : <CalendarClock size={13} />}
                 onClick={submit}
                 disabled={busy}
               >
-                {busy ? 'Scheduling…' : mode === 'schedule' ? `Schedule ${slideshows.length}` : `Draft ${slideshows.length}`}
+                {busy
+                  ? mode === 'download' ? 'Rendering…' : 'Scheduling…'
+                  : mode === 'download' ? `Download ${slideshows.length}`
+                  : mode === 'schedule' ? `Schedule ${slideshows.length}`
+                  : `Draft ${slideshows.length}`}
               </Button>
             </>
           )}

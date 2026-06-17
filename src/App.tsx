@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { Menu } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ScheduleModal } from './components/ScheduleModal';
 import { BulkScheduleModal } from './components/BulkScheduleModal';
@@ -26,8 +27,10 @@ export default function App() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [generateOpen, setGenerateOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const hasOpenrouter = !!config?.keys.openrouter;
+  const activeProvider = config?.provider ?? 'openrouter';
+  const hasAiKey = !!(config && config.keys[activeProvider]);
   const hasPostbridge = !!config?.keys.postbridge;
   const activeProject: Project | undefined = config?.projects.find(
     (p) => p.id === config.activeProjectId
@@ -47,7 +50,8 @@ export default function App() {
         const cfg = await api.getConfig();
         setConfig(cfg);
         setQueue(await api.getQueue());
-        if (!cfg.keys.openrouter && !cfg.keys.postbridge) setActiveView('settings');
+        const provider = cfg.provider ?? 'openrouter';
+        if (!cfg.keys[provider] && !cfg.keys.postbridge) setActiveView('settings');
         if (cfg.keys.postbridge) loadAccounts();
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Could not reach the Slidesmith server.');
@@ -120,6 +124,7 @@ export default function App() {
   // Global settings (keys/model/scraper config) + per-project edits (name/defaults), in one call.
   const saveSettings = async (patch: {
     keys?: AppConfig['keys'];
+    provider?: AppConfig['provider'];
     model?: string;
     scrapeMethod?: string;
     proxy?: string;
@@ -128,8 +133,8 @@ export default function App() {
     defaults?: Project['defaults'];
     imagePacks?: string[];
   }) => {
-    if (patch.keys || patch.model !== undefined || patch.scrapeMethod !== undefined || patch.proxy !== undefined || patch.pinterestActor !== undefined) {
-      await api.saveConfig({ keys: patch.keys, model: patch.model, scrapeMethod: patch.scrapeMethod, proxy: patch.proxy, pinterestActor: patch.pinterestActor });
+    if (patch.keys || patch.provider !== undefined || patch.model !== undefined || patch.scrapeMethod !== undefined || patch.proxy !== undefined || patch.pinterestActor !== undefined) {
+      await api.saveConfig({ keys: patch.keys, provider: patch.provider, model: patch.model, scrapeMethod: patch.scrapeMethod, proxy: patch.proxy, pinterestActor: patch.pinterestActor });
     }
     if (activeProject && (patch.name !== undefined || patch.defaults || patch.imagePacks)) {
       await api.updateProject(activeProject.id, {
@@ -178,6 +183,9 @@ export default function App() {
 
   return (
     <div className="flex h-full w-full bg-bg text-ink">
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-20 bg-black/40 md:hidden" onClick={() => setSidebarOpen(false)} />
+      )}
       <Sidebar
         activeView={activeView}
         onSelectView={setActiveView}
@@ -187,8 +195,17 @@ export default function App() {
         activeProjectId={config.activeProjectId}
         onSwitchProject={switchProject}
         onNewProject={newProject}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
       />
-      <main className="flex-1 h-full overflow-hidden flex flex-col">
+      <main className="flex-1 h-full overflow-hidden flex flex-col min-w-0">
+        {/* Mobile top bar */}
+        <div className="md:hidden flex items-center gap-3 px-4 py-3 border-b border-line shrink-0 bg-bg">
+          <button onClick={() => setSidebarOpen(true)} className="text-ink-4 hover:text-ink">
+            <Menu size={18} />
+          </button>
+          <span className="text-[14px] font-semibold text-ink">Slidesmith</span>
+        </div>
         {error && activeView !== 'settings' && (
           <div className="px-8 py-2 bg-red-50 border-b border-red-200 text-[12px] text-red-700">
             {error}
@@ -199,7 +216,7 @@ export default function App() {
           <QueueView
             slideshows={queue}
             generating={generating}
-            canGenerate={hasOpenrouter}
+            canGenerate={hasAiKey}
             onGenerate={() => setGenerateOpen(true)}
             selectedIds={selectedIds}
             onApprove={(id) => setScheduling(queue.find((s) => s.id === id) || null)}
@@ -233,8 +250,14 @@ export default function App() {
           slideshow={scheduling}
           accounts={accounts}
           defaults={activeProject.defaults}
+          hasPostbridge={hasPostbridge}
           onClose={() => setScheduling(null)}
           onConfirm={confirmSchedule}
+          onDownloadDone={async () => {
+            const id = scheduling.id;
+            setScheduling(null);
+            setQueue(await api.removeFromQueue(id));
+          }}
         />
       )}
 
@@ -251,6 +274,7 @@ export default function App() {
           slideshows={queue.filter((s) => selectedIds.includes(s.id))}
           accounts={accounts}
           defaults={activeProject.defaults}
+          hasPostbridge={hasPostbridge}
           // Closing via the X/backdrop must still drop any now-scheduled items
           // from the queue — otherwise it looks stale until a browser reload.
           onClose={async () => {

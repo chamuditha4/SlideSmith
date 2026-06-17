@@ -27,7 +27,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const getConfig = () => req<AppConfig>('/config');
 
 // Global settings only (keys + model + scraper config).
-export const saveConfig = (patch: { keys?: AppConfig['keys']; model?: string; scrapeMethod?: string; proxy?: string; pinterestActor?: string }) =>
+export const saveConfig = (patch: { keys?: AppConfig['keys']; provider?: AppConfig['provider']; model?: string; scrapeMethod?: string; proxy?: string; pinterestActor?: string }) =>
   req<AppConfig>('/config', { method: 'PUT', body: JSON.stringify(patch) });
 
 // Projects — each has its own Brain + default post-bridge accounts.
@@ -46,12 +46,13 @@ export const activateProject = (id: string) =>
   req<AppConfig>(`/projects/${id}/activate`, { method: 'POST' });
 
 export const testKeys = () =>
-  req<{ postbridge: boolean; openrouter: boolean; apify: boolean; errors: Record<string, string> }>(
+  req<{ postbridge: boolean; ai: boolean; apify: boolean; errors: Record<string, string> }>(
     '/config/test',
     { method: 'POST' }
   );
 
-export const getModels = () => req<ModelOption[]>('/models');
+export const getModels = (provider?: string) =>
+  req<ModelOption[]>(`/models${provider ? `?provider=${provider}` : ''}`);
 
 export const getQueue = () => req<Slideshow[]>('/queue');
 
@@ -81,6 +82,7 @@ export const deleteLibraryImage = (id: string) =>
   req<LibraryImage[]>(`/library/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 export const getAccounts = () => req<SocialAccount[]>('/accounts');
+
 
 export interface SchedulePayload {
   id: string;
