@@ -81,6 +81,9 @@ export const scrapePinterest = (searches: string[], count: number) =>
 export const deleteLibraryImage = (id: string) =>
   req<LibraryImage[]>(`/library/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
+export const deleteLibraryImages = (ids: string[]) =>
+  req<LibraryImage[]>('/library', { method: 'DELETE', body: JSON.stringify({ ids }) });
+
 export const getAccounts = () => req<SocialAccount[]>('/accounts');
 
 

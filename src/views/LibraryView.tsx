@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, Download, Trash2 } from 'lucide-react';
+import { Loader2, Download, Trash2, CheckSquare, Square } from 'lucide-react';
 import type { LibraryImage } from '../types';
 import { ViewHeader } from '../components/ViewHeader';
 import { Button } from '../components/Button';
-import { getLibrary, deleteLibraryImage } from '../lib/api';
+import { getLibrary, deleteLibraryImage, deleteLibraryImages } from '../lib/api';
 
 type Progress =
   | { phase: 'search'; message: string }
@@ -17,8 +17,10 @@ export function LibraryView() {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
-  const load = () => getLibrary().then(setImages).catch((e) => setError(e.message));
+  const load = () => getLibrary().then((imgs) => { setImages(imgs); setSelected(new Set()); }).catch((e) => setError(e.message));
   useEffect(() => { load(); }, []);
 
   const scrape = async () => {
@@ -27,7 +29,6 @@ export function LibraryView() {
     setProgress(null);
     setScraping(true);
     try {
-      // Pinterest searches are comma-separated phrases (each can contain spaces).
       const queries = searches.split(',').map((s) => s.trim()).filter(Boolean);
       const res = await fetch('/api/library/scrape', {
         method: 'POST',
@@ -68,7 +69,55 @@ export function LibraryView() {
     }
   };
 
-  const remove = async (id: string) => setImages(await deleteLibraryImage(id));
+  const remove = async (id: string) => {
+    // Optimistic: hide immediately, then sync from server response.
+    setImages((prev) => prev?.filter((img) => img.id !== id) ?? prev);
+    setSelected((prev) => { const s = new Set(prev); s.delete(id); return s; });
+    try {
+      const updated = await deleteLibraryImage(id);
+      setImages(updated);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      load();
+    }
+  };
+
+  const bulkDelete = async () => {
+    if (!selected.size) return;
+    const ids = [...selected];
+    setBulkDeleting(true);
+    // Optimistic remove
+    setImages((prev) => prev?.filter((img) => !selected.has(img.id)) ?? prev);
+    setSelected(new Set());
+    try {
+      const updated = await deleteLibraryImages(ids);
+      setImages(updated);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      load();
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const s = new Set(prev);
+      s.has(id) ? s.delete(id) : s.add(id);
+      return s;
+    });
+  };
+
+  const scrapedImages = useMemo(() => (images || []).filter((img) => img.source === 'scraped'), [images]);
+  const allSelected = scrapedImages.length > 0 && scrapedImages.every((img) => selected.has(img.id));
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(scrapedImages.map((img) => img.id)));
+    }
+  };
 
   // Group by pack, scraped packs first.
   const groups = useMemo(() => {
@@ -149,6 +198,30 @@ export function LibraryView() {
           </div>
         </div>
 
+        {/* Bulk-select toolbar — only shown when scraped images exist */}
+        {images !== null && scrapedImages.length > 0 && (
+          <div className="border-b border-line bg-surface px-4 py-2 sm:px-6 md:px-8 flex items-center gap-3">
+            <button
+              onClick={toggleSelectAll}
+              className="flex items-center gap-1.5 text-[12px] text-ink-5 hover:text-ink transition-colors"
+            >
+              {allSelected ? <CheckSquare size={14} /> : <Square size={14} />}
+              {allSelected ? 'Deselect all' : 'Select all scraped'}
+            </button>
+            {selected.size > 0 && (
+              <Button
+                variant="danger-ghost"
+                size="sm"
+                icon={bulkDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                onClick={bulkDelete}
+                disabled={bulkDeleting}
+              >
+                Delete {selected.size} image{selected.size === 1 ? '' : 's'}
+              </Button>
+            )}
+          </div>
+        )}
+
         {/* Packs */}
         <div className="p-4 sm:p-6 md:p-8">
           <div className="space-y-8">
@@ -165,16 +238,33 @@ export function LibraryView() {
                   </div>
                   <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2">
                     {imgs.map((img) => (
-                      <div key={img.id} className="group relative aspect-[9/16] rounded-lg overflow-hidden bg-raised">
+                      <div
+                        key={img.id}
+                        className={`group relative aspect-[9/16] rounded-lg overflow-hidden bg-raised cursor-pointer ring-2 transition-all ${
+                          selected.has(img.id) ? 'ring-ink' : 'ring-transparent'
+                        }`}
+                        onClick={img.source === 'scraped' ? () => toggleSelect(img.id) : undefined}
+                      >
                         <img src={img.url} alt="" loading="lazy" className="w-full h-full object-cover" />
                         {img.source === 'scraped' && (
-                          <button
-                            onClick={() => remove(img.id)}
-                            aria-label="Remove image"
-                            className="absolute top-1 right-1 w-6 h-6 rounded-md bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                          <>
+                            {selected.has(img.id) ? (
+                              <div className="absolute top-1 left-1 w-5 h-5 rounded bg-ink flex items-center justify-center">
+                                <CheckSquare size={11} className="text-white" />
+                              </div>
+                            ) : (
+                              <div className="absolute top-1 left-1 w-5 h-5 rounded bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Square size={11} className="text-white" />
+                              </div>
+                            )}
+                            <button
+                              onClick={(e) => { e.stopPropagation(); remove(img.id); }}
+                              aria-label="Remove image"
+                              className="absolute top-1 right-1 w-6 h-6 rounded-md bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </>
                         )}
                       </div>
                     ))}

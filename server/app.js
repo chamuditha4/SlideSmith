@@ -166,6 +166,13 @@ app.post('/api/library/scrape', async (req, res) => {
   res.end()
 })
 
+app.delete('/api/library', h(async (req, res) => {
+  const ids = req.body?.ids
+  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids required' })
+  for (const id of ids) removeScraped(id)
+  res.json(listLibrary())
+}))
+
 app.delete('/api/library/:id', h(async (req, res) => res.json(removeScraped(req.params.id))))
 
 app.get('/api/library/img/:id', h(async (req, res) => {

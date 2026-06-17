@@ -284,6 +284,30 @@ const IMG_HEADERS = {
 }
 
 async function downloadImages(urls, pack, proxy, onProgress) {
+  // On Vercel skip file downloads — store remote URLs only; /api/library/img/:id proxies on demand.
+  if (process.env.VERCEL) {
+    ensure()
+    const index = scrapedIndex()
+    const knownUrls = new Set(index.map((s) => s.remoteUrl).filter(Boolean))
+    const stamp = Date.now()
+    let added = 0
+    let skipped = 0
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i]
+      if (knownUrls.has(url)) {
+        skipped++
+        onProgress?.({ phase: 'download', downloaded: added + skipped, total: urls.length })
+        continue
+      }
+      index.unshift({ id: `scraped:${stamp}-${i}-${Math.round(Math.random() * 1e5)}`, remoteUrl: url, pack, addedAt: new Date().toISOString() })
+      knownUrls.add(url)
+      added++
+      onProgress?.({ phase: 'download', downloaded: added + skipped, total: urls.length })
+    }
+    writeJson(INDEX_PATH, index)
+    return { added, skipped }
+  }
+
   ensure()
   const index = scrapedIndex()
   // Build a set of already-downloaded source filenames so we never re-fetch
