@@ -256,7 +256,7 @@ const IMG_HEADERS = {
   Referer: 'https://www.pinterest.com/',
 }
 
-async function downloadImages(urls, pack, proxy) {
+async function downloadImages(urls, pack, proxy, onProgress) {
   ensure()
   const index = scrapedIndex()
   // Build a set of already-downloaded source filenames so we never re-fetch
@@ -280,8 +280,10 @@ async function downloadImages(urls, pack, proxy) {
       if (sourceFile) knownSourceFiles.add(sourceFile)
       added++
       if (added % 5 === 0 || added === urls.length) log.progress(added, urls.length, 'downloaded')
+      onProgress?.({ phase: 'download', downloaded: added + skipped, total: urls.length })
     } catch {
       skipped++
+      onProgress?.({ phase: 'download', downloaded: added + skipped, total: urls.length })
     }
   }
 
@@ -326,7 +328,7 @@ function pinImageUrls(items) {
 
 const APIFY = 'https://api.apify.com/v2/acts'
 
-async function scrapeViaApify({ apiKey, actor, searches, count, proxy }) {
+async function scrapeViaApify({ apiKey, actor, searches, count, proxy, onProgress }) {
   if (!apiKey) throw new Error('Missing Apify API key. Add it in Settings.')
   const queries = (searches || []).map((s) => s.trim()).filter(Boolean)
   if (!queries.length) throw new Error('Enter at least one Pinterest search.')
@@ -337,6 +339,7 @@ async function scrapeViaApify({ apiKey, actor, searches, count, proxy }) {
 
   log.start(`Scraping Pinterest via Apify → "${pack}" (up to ${limit})`)
   log.step(`running actor ${actor || 'fatihtahta/pinterest-scraper-search'}…`)
+  onProgress?.({ phase: 'search', message: `Running Apify actor for "${pack}"…` })
   const res = await fetch(`${APIFY}/${actorPath}/run-sync-get-dataset-items?token=${apiKey}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -357,8 +360,9 @@ async function scrapeViaApify({ apiKey, actor, searches, count, proxy }) {
     throw new Error(`No images found (actor returned ${n} item${n === 1 ? '' : 's'}). Try a different search or actor.`)
   }
   log.ok(`found ${urls.length} image${urls.length === 1 ? '' : 's'} — downloading…`)
+  onProgress?.({ phase: 'search', message: `Found ${urls.length} image${urls.length === 1 ? '' : 's'} — downloading…` })
 
-  const { added, skipped } = await downloadImages(urls, pack, proxy)
+  const { added, skipped } = await downloadImages(urls, pack, proxy, onProgress)
   log.ok(`Added ${added} image${added === 1 ? '' : 's'} to "${pack}"${skipped ? ` (${skipped} skipped)` : ''}`)
   return { added, found: urls.length }
 }
@@ -395,8 +399,40 @@ function buildIdentity() {
     macosVer: pick(MACOS_PLATFORM_VERSIONS),
     dpr: Math.random() > 0.6 ? '2' : '1',
     appVersion: randomHex(7),
-    csrfToken: randomHex(32),
+    csrfToken: randomHex(32), // replaced with real token by bootstrapSession
   }
+}
+
+// Hit Pinterest's homepage to get a real server-issued csrftoken cookie.
+// Without a real token the first search request is always cold (0 results).
+// Falls back silently to the random token if the request fails.
+async function bootstrapSession(proxy, identity) {
+  const { chrome, macosVer } = identity
+  try {
+    const res = await httpsGet(
+      'https://www.pinterest.com/',
+      {
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'accept-language': 'en-US,en;q=0.9',
+        'sec-ch-ua': `"Google Chrome";v="${chrome.major}", "Chromium";v="${chrome.major}", "Not)A;Brand";v="24"`,
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"macOS"',
+        'sec-fetch-dest': 'document',
+        'sec-fetch-mode': 'navigate',
+        'sec-fetch-site': 'none',
+        'user-agent': `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome.build} Safari/537.36`,
+      },
+      proxy,
+      15_000
+    )
+    const setCookies = res.headers['set-cookie'] || []
+    const list = Array.isArray(setCookies) ? setCookies : [setCookies]
+    for (const c of list) {
+      const m = c.match(/(?:^|;\s*)csrftoken=([^;]+)/)
+      if (m) return m[1]
+    }
+  } catch {}
+  return null
 }
 
 // Build request headers for Pinterest's search API POST request.
@@ -579,7 +615,7 @@ async function searchPins(query, limit, proxy, identity) {
   return collected.slice(0, limit)
 }
 
-async function scrapeDirect({ searches, count, proxy }) {
+async function scrapeDirect({ searches, count, proxy, onProgress }) {
   const queries = (searches || []).map((s) => s.trim()).filter(Boolean)
   if (!queries.length) throw new Error('Enter at least one Pinterest search.')
 
@@ -590,11 +626,20 @@ async function scrapeDirect({ searches, count, proxy }) {
   if (proxy) log.step('routing through proxy')
 
   const identity = buildIdentity()
+  log.step('establishing Pinterest session…')
+  const realToken = await bootstrapSession(proxy, identity)
+  if (realToken) {
+    identity.csrfToken = realToken
+    log.info('session token acquired')
+  } else {
+    log.info('session bootstrap failed — using fallback token')
+  }
 
   const perQuery = Math.ceil(limit / queries.length)
   const allUrls = []
   for (const query of queries) {
     log.step(`searching "${query}"…`)
+    onProgress?.({ phase: 'search', message: `Searching "${query}"…` })
     const found = await searchPins(query, perQuery, proxy, identity)
     log.info(`"${query}" → ${found.length} image${found.length === 1 ? '' : 's'}`)
     allUrls.push(...found)
@@ -615,8 +660,9 @@ async function scrapeDirect({ searches, count, proxy }) {
   }
 
   log.ok(`found ${finalUrls.length} image${finalUrls.length === 1 ? '' : 's'} — downloading…`)
+  onProgress?.({ phase: 'search', message: `Found ${finalUrls.length} image${finalUrls.length === 1 ? '' : 's'} — downloading…` })
 
-  const { added, skipped } = await downloadImages(finalUrls, pack, proxy)
+  const { added, skipped } = await downloadImages(finalUrls, pack, proxy, onProgress)
   if (added === 0 && skipped > 0) {
     log.ok(`All ${skipped} image${skipped === 1 ? '' : 's'} already in library — nothing new to add`)
   } else {
@@ -627,9 +673,9 @@ async function scrapeDirect({ searches, count, proxy }) {
 
 // ── Dispatcher ───────────────────────────────────────────────────────────────
 
-export async function scrapePinterest({ method, apiKey, actor, proxy, searches, count }) {
+export async function scrapePinterest({ method, apiKey, actor, proxy, searches, count, onProgress }) {
   if (method === 'apify') {
-    return scrapeViaApify({ apiKey, actor, searches, count, proxy })
+    return scrapeViaApify({ apiKey, actor, searches, count, proxy, onProgress })
   }
-  return scrapeDirect({ searches, count, proxy })
+  return scrapeDirect({ searches, count, proxy, onProgress })
 }

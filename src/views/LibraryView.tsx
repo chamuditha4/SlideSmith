@@ -3,13 +3,18 @@ import { Loader2, Download, Trash2 } from 'lucide-react';
 import type { LibraryImage } from '../types';
 import { ViewHeader } from '../components/ViewHeader';
 import { Button } from '../components/Button';
-import { getLibrary, scrapePinterest, deleteLibraryImage } from '../lib/api';
+import { getLibrary, deleteLibraryImage } from '../lib/api';
+
+type Progress =
+  | { phase: 'search'; message: string }
+  | { phase: 'download'; downloaded: number; total: number };
 
 export function LibraryView() {
   const [images, setImages] = useState<LibraryImage[] | null>(null);
   const [searches, setSearches] = useState('');
   const [count, setCount] = useState(40);
   const [scraping, setScraping] = useState(false);
+  const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -19,17 +24,47 @@ export function LibraryView() {
   const scrape = async () => {
     setError(null);
     setNote(null);
+    setProgress(null);
     setScraping(true);
     try {
       // Pinterest searches are comma-separated phrases (each can contain spaces).
       const queries = searches.split(',').map((s) => s.trim()).filter(Boolean);
-      const r = await scrapePinterest(queries, count);
-      setNote(`Added ${r.added} image${r.added === 1 ? '' : 's'} from ${r.found} found.`);
-      await load();
+      const res = await fetch('/api/library/scrape', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ searches: queries, count }),
+      });
+      if (!res.body) throw new Error('No response body');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split('\n\n');
+        buffer = chunks.pop() ?? '';
+        for (const chunk of chunks) {
+          const line = chunk.split('\n').find((l) => l.startsWith('data: '));
+          if (!line) continue;
+          const data = JSON.parse(line.slice(6));
+          if (data.type === 'done') {
+            setNote(`Added ${data.added} image${data.added === 1 ? '' : 's'} from ${data.found} found.`);
+            await load();
+          } else if (data.type === 'error') {
+            setError(data.message);
+          } else if (data.phase) {
+            setProgress(data as Progress);
+          }
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setScraping(false);
+      setProgress(null);
     }
   };
 
@@ -92,6 +127,23 @@ export function LibraryView() {
             <p className="text-[12px] text-ink-5 mt-2">
               Scrapes Pinterest directly — no third-party API needed. If you get blocked, add a proxy in Settings.
             </p>
+            {scraping && progress && (
+              <div className="mt-3 max-w-xs">
+                <p className="text-[11px] text-ink-5 mb-1">
+                  {progress.phase === 'download'
+                    ? `Downloading ${progress.downloaded} / ${progress.total}…`
+                    : progress.message}
+                </p>
+                {progress.phase === 'download' && (
+                  <div className="h-1.5 rounded-full bg-raised overflow-hidden">
+                    <div
+                      className="h-full bg-ink rounded-full transition-all duration-200"
+                      style={{ width: `${Math.round((progress.downloaded / progress.total) * 100)}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
             {note && <p className="text-[12px] text-emerald-600 mt-2">{note}</p>}
             {error && <p className="text-[12px] text-red-600 mt-2">{error}</p>}
           </div>

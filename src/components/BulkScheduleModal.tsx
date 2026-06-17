@@ -5,6 +5,7 @@ import { Button } from './Button';
 import { renderSlideshow } from '../lib/render';
 import { schedule as scheduleOne, getScheduledPosts } from '../lib/api';
 import { downloadZip, slideshowTextFiles } from '../lib/zip';
+import type { ZipEntry } from '../lib/zip';
 
 // post-bridge dashboard — where the user reviews what we just sent over.
 const PB_SCHEDULED_URL = 'https://www.post-bridge.com/dashboard/posts/scheduled';
@@ -77,7 +78,7 @@ export function BulkScheduleModal({ slideshows, accounts, defaults, hasPostbridg
 
     if (mode === 'download') {
       setProgress({ done: 0, total: slideshows.length });
-      const allFiles: { name: string; data: string }[] = [];
+      const allFiles: ZipEntry[] = [];
       let ok = 0;
       for (let i = 0; i < slideshows.length; i++) {
         try {

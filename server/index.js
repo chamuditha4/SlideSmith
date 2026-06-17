@@ -151,11 +151,28 @@ app.put('/api/queue/:id', h(async (req, res) => {
 app.get('/api/library', h(async (_req, res) => res.json(listLibrary())))
 app.get('/api/library/packs', h(async (_req, res) => res.json(listPacks())))
 
-app.post('/api/library/scrape', h(async (req, res) => {
+app.post('/api/library/scrape', async (req, res) => {
   const { scrapeMethod, proxy, pinterestActor, keys } = getConfig()
   const { searches, count } = req.body || {}
-  res.json(await scrapePinterest({ method: scrapeMethod, apiKey: keys.apify, actor: pinterestActor, proxy, searches, count }))
-}))
+
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+
+  const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
+
+  try {
+    const result = await scrapePinterest({
+      method: scrapeMethod, apiKey: keys.apify, actor: pinterestActor,
+      proxy, searches, count, onProgress: send,
+    })
+    send({ type: 'done', ...result })
+  } catch (e) {
+    console.error(e)
+    send({ type: 'error', message: e.message || String(e) })
+  }
+  res.end()
+})
 
 app.delete('/api/library/:id', h(async (req, res) => res.json(removeScraped(req.params.id))))
 

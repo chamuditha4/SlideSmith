@@ -3,7 +3,7 @@ import type { Slideshow } from '../types';
 
 // binary: true  → data is a base64 data URL ("data:image/png;base64,...")
 // binary: false → data is a plain string written as-is
-type ZipEntry = { name: string; data: string; binary?: boolean };
+export type ZipEntry = { name: string; data: string; binary?: boolean };
 
 export async function downloadZip(filename: string, files: ZipEntry[]) {
   const zip = new JSZip();
