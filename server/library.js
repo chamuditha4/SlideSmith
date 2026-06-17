@@ -68,11 +68,13 @@ function reconcileOrphans() {
 }
 
 export function listLibrary() {
-  // Only list scraped images whose files actually exist on disk — avoids broken
-  // thumbnails / 404s if the index and files ever drift apart. Reconcile first
-  // so any orphaned files on disk are picked back up.
+  // Include both file-based entries (local dev) and URL-only entries (Vercel).
+  // Reconcile first so orphaned disk files are re-indexed rather than silently lost.
   const scraped = reconcileOrphans()
-    .filter((s) => existsSync(join(MEDIA_DIR, s.file)))
+    .filter((s) => {
+      if (s.remoteUrl && !s.file) return true        // URL-only (Vercel mode)
+      return s.file && existsSync(join(MEDIA_DIR, s.file)) // file-based (local)
+    })
     .map((s) => ({
       id: s.id,
       url: `/api/library/img/${encodeURIComponent(s.id)}`,
@@ -98,9 +100,34 @@ export function listPacks() {
 
 export function getScrapedFile(id) {
   const rec = scrapedIndex().find((s) => s.id === id)
-  if (!rec) return null
+  if (!rec || !rec.file) return null
   const p = join(MEDIA_DIR, rec.file)
   return existsSync(p) ? p : null
+}
+
+// Returns the remote Pinterest URL for URL-only entries (Vercel mode).
+// The caller (app.js /api/library/img/:id) proxies this to the browser.
+export function getScrapedRemoteUrl(id) {
+  const rec = scrapedIndex().find((s) => s.id === id)
+  return rec?.remoteUrl || null
+}
+
+// Add URL-only image records to the library index (no file download).
+// Used by the Vercel scrape serverless function where /tmp is ephemeral.
+export function addUrlImages(images) {
+  // images: [{ id, remoteUrl, pack }]
+  ensure()
+  const index = scrapedIndex()
+  const knownUrls = new Set(index.map((s) => s.remoteUrl).filter(Boolean))
+  let added = 0
+  for (const img of images) {
+    if (knownUrls.has(img.remoteUrl)) continue
+    index.unshift({ id: img.id, remoteUrl: img.remoteUrl, pack: img.pack, addedAt: new Date().toISOString() })
+    knownUrls.add(img.remoteUrl)
+    added++
+  }
+  writeJson(INDEX_PATH, index)
+  return { added, total: images.length }
 }
 
 export function removeScraped(id) {
@@ -108,7 +135,7 @@ export function removeScraped(id) {
   const rec = index.find((s) => s.id === id)
   // Delete the actual file too — otherwise reconcileOrphans() sees an
   // un-indexed file on disk and immediately re-adds it ("zombie" delete).
-  if (rec) {
+  if (rec && rec.file) {
     const p = join(MEDIA_DIR, rec.file)
     if (existsSync(p)) rmSync(p)
   }

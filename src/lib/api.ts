@@ -1,12 +1,10 @@
-// Frontend API client for the Vercel deployment.
-// State (config, queue, scraped library) lives in localStorage via store.ts.
-// External calls (AI generation, post-bridge, Pinterest) hit Vercel serverless
-// functions in /api/ — which receive API keys per-request from this module.
+// Frontend API client. All calls go to the local Slidesmith server (proxied at
+// /api in dev, same-origin in production). The server holds the keys and talks
+// to Claude + post-bridge — the browser never sees the secrets in a request.
 import type {
   AppConfig,
   Project,
   Slideshow,
-  Slide,
   SocialAccount,
   ScheduledPost,
   PostResult,
@@ -14,14 +12,11 @@ import type {
   LibraryImage,
   LibraryPack,
 } from '../types';
-import * as store from './store';
-
-// ── HTTP helper ───────────────────────────────────────────────────────────────
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     headers: { 'content-type': 'application/json' },
-    cache: 'no-store',
+    cache: 'no-store', // always hit the server — never a stale Schedule/Results list
     ...init,
   });
   const body = await res.json().catch(() => ({}));
@@ -29,208 +24,90 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-// ── Config & Projects (localStorage) ─────────────────────────────────────────
+export const getConfig = () => req<AppConfig>('/config');
 
-export const getConfig = () => store.getConfig();
+// Global settings only (keys + model + scraper config).
+export const saveConfig = (patch: { keys?: AppConfig['keys']; provider?: AppConfig['provider']; model?: string; scrapeMethod?: string; proxy?: string; pinterestActor?: string }) =>
+  req<AppConfig>('/config', { method: 'PUT', body: JSON.stringify(patch) });
 
-export const saveConfig = async (
-  patch: Partial<Pick<AppConfig, 'keys' | 'provider' | 'model' | 'scrapeMethod' | 'proxy' | 'pinterestActor'>>
-): Promise<AppConfig> => {
-  const cfg = await store.getConfig();
-  return store.saveGlobal(cfg, patch);
-};
+// Projects — each has its own Brain + default post-bridge accounts.
+export const createProject = (name?: string) =>
+  req<AppConfig>('/projects', { method: 'POST', body: JSON.stringify({ name }) });
 
-export const createProject = async (name?: string): Promise<AppConfig> => {
-  const cfg = await store.getConfig();
-  return store.createProject(cfg, name);
-};
-
-export const updateProject = async (
+export const updateProject = (
   id: string,
   patch: Partial<Pick<Project, 'name' | 'brain' | 'defaults' | 'imagePacks'>>
-): Promise<AppConfig> => {
-  const cfg = await store.getConfig();
-  return store.updateProject(cfg, id, patch);
-};
+) => req<AppConfig>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(patch) });
 
-export const deleteProject = async (id: string): Promise<AppConfig> => {
-  const cfg = await store.getConfig();
-  return store.deleteProject(cfg, id);
-};
+export const deleteProject = (id: string) =>
+  req<AppConfig>(`/projects/${id}`, { method: 'DELETE' });
 
-export const activateProject = async (id: string): Promise<AppConfig> => {
-  const cfg = await store.getConfig();
-  return store.setActiveProject(cfg, id);
-};
+export const activateProject = (id: string) =>
+  req<AppConfig>(`/projects/${id}/activate`, { method: 'POST' });
 
-// ── Queue (localStorage) ──────────────────────────────────────────────────────
-
-export const getQueue = async (): Promise<Slideshow[]> => {
-  const cfg = await store.getConfig();
-  const active = cfg.projects.find((p) => p.id === cfg.activeProjectId) || cfg.projects[0];
-  return store.getQueue(active.id);
-};
-
-export const removeFromQueue = async (id: string): Promise<Slideshow[]> => {
-  const cfg = await store.getConfig();
-  const active = cfg.projects.find((p) => p.id === cfg.activeProjectId) || cfg.projects[0];
-  return store.removeFromQueue(active.id, id);
-};
-
-export const updateSlideshow = async (
-  id: string,
-  patch: Partial<Pick<Slideshow, 'slides' | 'caption' | 'hashtags' | 'hook'>>
-): Promise<Slideshow[]> => {
-  const cfg = await store.getConfig();
-  const active = cfg.projects.find((p) => p.id === cfg.activeProjectId) || cfg.projects[0];
-  return store.updateInQueue(active.id, id, patch);
-};
-
-// ── AI Generation (serverless) ────────────────────────────────────────────────
-
-export const generate = async (count = 4, packs?: string[]): Promise<Slideshow[]> => {
-  const cfg = await store.getConfig();
-  const active = cfg.projects.find((p) => p.id === cfg.activeProjectId) || cfg.projects[0];
-  const selectedPacks = packs ?? active.imagePacks ?? [];
-
-  // Build background pool from the library, filtered by selected packs.
-  // Scraped images are proxied through /api/library/img so canvas rendering works.
-  let pool: { url: string }[] = [];
-  if (selectedPacks.length) {
-    const allImages = await getLibrary();
-    pool = allImages
-      .filter((img) => selectedPacks.includes(img.pack))
-      .map((img) => ({ url: img.url }));
-  }
-
-  const slideshows = await req<Slideshow[]>('/generate', {
-    method: 'POST',
-    body: JSON.stringify({
-      apiKey:   cfg.keys[cfg.provider],
-      model:    cfg.model,
-      provider: cfg.provider,
-      brain:    active.brain,
-      count,
-      pool,
-    }),
-  });
-
-  store.addToQueue(active.id, slideshows);
-  return slideshows;
-};
-
-// ── Image Library ─────────────────────────────────────────────────────────────
-
-// Fetch bundled packs from the static manifest and combine with scraped URLs.
-// Scraped images are served via the /api/library/img proxy so they're
-// same-origin for canvas rendering (avoids cross-origin taint).
-export const getLibrary = async (): Promise<LibraryImage[]> => {
-  let bundled: LibraryImage[] = [];
-  try {
-    const manifest = await fetch('/library/manifest.json').then((r) => r.json());
-    bundled = (manifest.packs || []).flatMap((pack: { name: string; images: string[] }) =>
-      (pack.images || []).map((path: string) => ({
-        id: `bundled:${path}`,
-        url: `/library/${path}`,
-        pack: pack.name,
-        source: 'bundled' as const,
-      }))
-    );
-  } catch {}
-
-  const scraped = store.getScrapedImages().map((img) => ({
-    ...img,
-    // Proxy scraped images so they're same-origin for canvas rendering.
-    url: `/api/library/img?url=${encodeURIComponent(img.url)}`,
-  }));
-
-  return [...scraped, ...bundled];
-};
-
-export const getPacks = async (): Promise<LibraryPack[]> => {
-  const images = await getLibrary();
-  const map = new Map<string, LibraryPack>();
-  for (const img of images) {
-    if (!map.has(img.pack)) {
-      map.set(img.pack, { name: img.pack, source: img.source, count: 0, covers: [] });
-    }
-    const p = map.get(img.pack)!;
-    p.count++;
-    if (p.covers.length < 4) p.covers.push(img.url);
-  }
-  return [...map.values()];
-};
-
-export const deleteLibraryImage = async (id: string): Promise<LibraryImage[]> => {
-  store.removeScrapedImage(id);
-  return getLibrary();
-};
-
-// scrapePinterest is handled directly in LibraryView (SSE streaming).
-
-// ── Models (serverless — OpenRouter needs a proxy, others return static lists) ─
+export const testKeys = () =>
+  req<{ postbridge: boolean; ai: boolean; apify: boolean; errors: Record<string, string> }>(
+    '/config/test',
+    { method: 'POST' }
+  );
 
 export const getModels = (provider?: string) =>
-  req<ModelOption[]>(`/models${provider ? `?provider=${encodeURIComponent(provider)}` : ''}`);
+  req<ModelOption[]>(`/models${provider ? `?provider=${provider}` : ''}`);
 
-// ── Key test (serverless — validates keys against each provider's API) ─────────
+export const getQueue = () => req<Slideshow[]>('/queue');
 
-export const testKeys = async () => {
-  const cfg = await store.getConfig();
-  return req<{ postbridge: boolean; ai: boolean; apify: boolean; errors: Record<string, string> }>(
-    '/config/test',
-    { method: 'POST', body: JSON.stringify({ keys: cfg.keys, provider: cfg.provider }) }
-  );
-};
+export const generate = (count = 4, packs?: string[]) =>
+  req<Slideshow[]>('/generate', { method: 'POST', body: JSON.stringify({ count, packs }) });
 
-// ── post-bridge: Accounts ─────────────────────────────────────────────────────
+export const removeFromQueue = (id: string) =>
+  req<Slideshow[]>(`/queue/${id}`, { method: 'DELETE' });
 
-export const getAccounts = async (): Promise<SocialAccount[]> => {
-  const cfg = await store.getConfig();
-  if (!cfg.keys.postbridge) return [];
-  return req<SocialAccount[]>('/accounts', {
+export const updateSlideshow = (
+  id: string,
+  patch: Partial<Pick<Slideshow, 'slides' | 'caption' | 'hashtags' | 'hook'>>
+) => req<Slideshow[]>(`/queue/${id}`, { method: 'PUT', body: JSON.stringify(patch) });
+
+// ── Image library ─────────────────────────────────────────────────────────────
+export const getLibrary = () => req<LibraryImage[]>('/library');
+
+export const getPacks = () => req<LibraryPack[]>('/library/packs');
+
+export const scrapePinterest = (searches: string[], count: number) =>
+  req<{ added: number; found: number }>('/library/scrape', {
     method: 'POST',
-    body: JSON.stringify({ postbridgeKey: cfg.keys.postbridge }),
+    body: JSON.stringify({ searches, count }),
   });
-};
 
-// ── post-bridge: Schedule ─────────────────────────────────────────────────────
+export const deleteLibraryImage = (id: string) =>
+  req<LibraryImage[]>(`/library/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+export const getAccounts = () => req<SocialAccount[]>('/accounts');
+
 
 export interface SchedulePayload {
   id: string;
   caption: string;
-  slides: string[];
+  slides: string[]; // PNG data URLs
   socialAccounts: number[];
   scheduledAt: string | null;
   mode: 'draft' | 'schedule';
 }
 
-export const schedule = async (payload: SchedulePayload): Promise<unknown> => {
-  const cfg = await store.getConfig();
-  const active = cfg.projects.find((p) => p.id === cfg.activeProjectId) || cfg.projects[0];
-  const result = await req<unknown>('/schedule', {
-    method: 'POST',
-    body: JSON.stringify({ ...payload, postbridgeKey: cfg.keys.postbridge }),
-  });
-  // Remove from local queue now that it's been sent to post-bridge.
-  if (payload.id) store.removeFromQueue(active.id, payload.id);
-  return result;
-};
+export const schedule = (payload: SchedulePayload) =>
+  req<unknown>('/schedule', { method: 'POST', body: JSON.stringify(payload) });
 
-// ── post-bridge: Posts / Analytics ───────────────────────────────────────────
-
+// post-bridge → ScheduledPost. post-bridge stores caption + media + schedule;
+// it has no concept of our per-slide text, so the Schedule view shows the
+// rendered images + caption + status.
 export async function getScheduledPosts(): Promise<ScheduledPost[]> {
-  const cfg = await store.getConfig();
-  if (!cfg.keys.postbridge) return [];
-  const raw = await req<Array<Record<string, unknown>>>('/posts', {
-    method: 'POST',
-    body: JSON.stringify({ postbridgeKey: cfg.keys.postbridge }),
-  });
+  const raw = await req<Array<Record<string, unknown>>>('/posts');
   return raw.map((p) => ({
     id: String(p.id),
     caption: String(p.caption || ''),
     status: String(p.status || (p.is_draft ? 'draft' : 'scheduled')),
     scheduledAt: (p.scheduled_at as string) || null,
+    // The server resolves post-bridge's nested media (media.object.url) into a
+    // flat string[] under `media_urls` — fall back to raw media for safety.
     mediaUrls: Array.isArray(p.media_urls)
       ? (p.media_urls as unknown[]).map(String).filter(Boolean)
       : Array.isArray(p.media)
@@ -259,24 +136,12 @@ function mapResult(a: Record<string, unknown>): PostResult {
 }
 
 export async function getResults(): Promise<PostResult[]> {
-  const cfg = await store.getConfig();
-  if (!cfg.keys.postbridge) return [];
-  const raw = await req<Array<Record<string, unknown>>>('/results', {
-    method: 'POST',
-    body: JSON.stringify({ postbridgeKey: cfg.keys.postbridge }),
-  });
+  const raw = await req<Array<Record<string, unknown>>>('/results');
   return raw.map(mapResult);
 }
 
+// Trigger a post-bridge analytics sync, then return the refreshed results.
 export async function syncResults(): Promise<PostResult[]> {
-  const cfg = await store.getConfig();
-  if (!cfg.keys.postbridge) return [];
-  const raw = await req<Array<Record<string, unknown>>>('/results/sync', {
-    method: 'POST',
-    body: JSON.stringify({ postbridgeKey: cfg.keys.postbridge }),
-  });
+  const raw = await req<Array<Record<string, unknown>>>('/results/sync', { method: 'POST' });
   return raw.map(mapResult);
 }
-
-// Re-export Slide type so callers that imported it from api.ts keep working.
-export type { Slide };

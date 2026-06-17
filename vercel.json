@@ -1,13 +1,16 @@
 {
   "buildCommand": "pnpm run build",
   "outputDirectory": "dist",
+  "env": {
+    "SLIDESMITH_DIR": "/tmp/slidesmith"
+  },
   "functions": {
-    "api/generate.js":        { "maxDuration": 60 },
-    "api/schedule.js":        { "maxDuration": 60 },
-    "api/library/scrape.js":  { "maxDuration": 300 },
-    "api/library/img.js":     { "maxDuration": 10 }
+    "api/index.js":           { "maxDuration": 60  },
+    "api/library/scrape.js":  { "maxDuration": 300 }
   },
   "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    { "source": "/api/library/scrape", "destination": "/api/library/scrape" },
+    { "source": "/api/(.*)",           "destination": "/api/index"           },
+    { "source": "/((?!api/).*)",       "destination": "/index.html"          }
   ]
 }

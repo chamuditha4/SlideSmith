@@ -4,8 +4,6 @@ import type { LibraryImage } from '../types';
 import { ViewHeader } from '../components/ViewHeader';
 import { Button } from '../components/Button';
 import { getLibrary, deleteLibraryImage } from '../lib/api';
-import { getConfig } from '../lib/store';
-import { addScrapedImages } from '../lib/store';
 
 type Progress =
   | { phase: 'search'; message: string }
@@ -29,20 +27,12 @@ export function LibraryView() {
     setProgress(null);
     setScraping(true);
     try {
+      // Pinterest searches are comma-separated phrases (each can contain spaces).
       const queries = searches.split(',').map((s) => s.trim()).filter(Boolean);
-      const cfg = await getConfig();
-
       const res = await fetch('/api/library/scrape', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          searches: queries,
-          count,
-          method: cfg.scrapeMethod,
-          proxy: cfg.proxy,
-          actor: cfg.pinterestActor,
-          apiKey: cfg.keys.apify,
-        }),
+        body: JSON.stringify({ searches: queries, count }),
       });
       if (!res.body) throw new Error('No response body');
 
@@ -61,10 +51,6 @@ export function LibraryView() {
           if (!line) continue;
           const data = JSON.parse(line.slice(6));
           if (data.type === 'done') {
-            // Save returned image URLs to localStorage, then reload the library.
-            if (Array.isArray(data.images) && data.images.length) {
-              addScrapedImages(data.images);
-            }
             setNote(`Added ${data.added} image${data.added === 1 ? '' : 's'} from ${data.found} found.`);
             await load();
           } else if (data.type === 'error') {
@@ -84,6 +70,7 @@ export function LibraryView() {
 
   const remove = async (id: string) => setImages(await deleteLibraryImage(id));
 
+  // Group by pack, scraped packs first.
   const groups = useMemo(() => {
     const map = new Map<string, LibraryImage[]>();
     for (const img of images || []) {
