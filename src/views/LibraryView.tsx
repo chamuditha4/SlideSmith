@@ -56,7 +56,7 @@ export function LibraryView() {
         {/* Scrape bar */}
         <div className="border-b border-line bg-surface">
           <div className="px-4 py-4 sm:px-6 md:px-8">
-            <div className="flex items-end gap-2 flex-wrap">
+            <div className="flex items-end gap-2 flex-wrap max-w-3xl">
               <div className="flex-1 min-w-[200px]">
                 <label className="text-[11px] text-ink-5 mb-1 block">Pinterest searches</label>
                 <input
@@ -77,7 +77,6 @@ export function LibraryView() {
                   onBlur={() => setCount((c) => Math.min(Math.max(c || 1, 1), 200))}
                   className="w-full h-9 bg-card border border-line rounded-lg px-3 text-[13px] text-ink outline-none focus:border-ink-7 focus:ring-2 focus:ring-ink/10"
                 />
-                <span className="text-[10px] text-ink-6 mt-1 block">min 10</span>
               </div>
               <Button
                 variant="primary"
@@ -89,6 +88,7 @@ export function LibraryView() {
                 {scraping ? 'Scraping…' : 'Scrape Pinterest'}
               </Button>
             </div>
+            <p className="text-[11px] text-ink-6 mt-1">1–200 images per search</p>
             <p className="text-[12px] text-ink-5 mt-2">
               Scrapes Pinterest directly — no third-party API needed. If you get blocked, add a proxy in Settings.
             </p>
