@@ -134,7 +134,7 @@ export default function App() {
     imagePacks?: string[];
   }) => {
     if (patch.keys || patch.provider !== undefined || patch.model !== undefined || patch.scrapeMethod !== undefined || patch.proxy !== undefined || patch.pinterestActor !== undefined) {
-      await api.saveConfig({ keys: patch.keys, provider: patch.provider, model: patch.model, scrapeMethod: patch.scrapeMethod, proxy: patch.proxy, pinterestActor: patch.pinterestActor });
+      await api.saveConfig({ keys: patch.keys, provider: patch.provider, model: patch.model, scrapeMethod: patch.scrapeMethod as AppConfig['scrapeMethod'], proxy: patch.proxy, pinterestActor: patch.pinterestActor });
     }
     if (activeProject && (patch.name !== undefined || patch.defaults || patch.imagePacks)) {
       await api.updateProject(activeProject.id, {

@@ -1,0 +1,13 @@
+{
+  "buildCommand": "pnpm run build",
+  "outputDirectory": "dist",
+  "functions": {
+    "api/generate.js":        { "maxDuration": 60 },
+    "api/schedule.js":        { "maxDuration": 60 },
+    "api/library/scrape.js":  { "maxDuration": 300 },
+    "api/library/img.js":     { "maxDuration": 10 }
+  },
+  "rewrites": [
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ]
+}
