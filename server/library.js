@@ -221,18 +221,25 @@ const IMG_HEADERS = {
 async function downloadImages(urls, pack, proxy) {
   ensure()
   const index = scrapedIndex()
+  // Build a set of already-downloaded source filenames so we never re-fetch
+  // an image that's already in the library (regardless of which scrape added it).
+  const knownSourceFiles = new Set(index.map((s) => s.sourceFile).filter(Boolean))
   let added = 0
   let skipped = 0
 
   for (const url of urls) {
     try {
+      const sourceFile = new URL(url).pathname.split('/').pop()?.split('?')[0] || ''
+      if (sourceFile && knownSourceFiles.has(sourceFile)) { skipped++; continue }
+
       const r = await httpsGet(url, IMG_HEADERS, proxy, 30_000)
       if (!r.ok || r.buffer.length < 1024) { skipped++; continue }
       const ext = (extname(new URL(url).pathname) || '.jpg').slice(0, 5)
       const id = `scraped:${Date.now()}-${Math.round(Math.random() * 1e6)}`
       const file = `${id.replace('scraped:', '')}${ext}`
       writeFileSync(join(MEDIA_DIR, file), r.buffer)
-      index.unshift({ id, file, pack, addedAt: new Date().toISOString() })
+      index.unshift({ id, file, pack, addedAt: new Date().toISOString(), sourceFile })
+      if (sourceFile) knownSourceFiles.add(sourceFile)
       added++
       if (added % 5 === 0 || added === urls.length) log.progress(added, urls.length, 'downloaded')
     } catch {
@@ -377,15 +384,15 @@ function buildPinHeaders(query, identity) {
     'x-app-version': appVersion,
     'x-pinterest-appstate': 'active',
     'x-pinterest-pws-handler': 'www/search/[scope].js',
-    'x-pinterest-source-url': `/search/pins/?q=${encodeURIComponent(query)}&rs=filter`,
+    'x-pinterest-source-url': `/search/pins/?q=${encodeURIComponent(query)}&rs=typed`,
     'x-requested-with': 'XMLHttpRequest',
   }
 }
 
-// Fetch one page of results from Pinterest's internal resource API. There's
-// no reliable pagination bookmark for anonymous requests (see searchPins), so
-// this always fetches a single "first page" — callers de-dupe across calls.
-async function fetchPinterestPage(query, proxy, identity) {
+// Fetch one page of results from Pinterest's internal resource API.
+// Returns { urls, bookmark } — bookmark is the pagination token for the next page,
+// or null when Pinterest has no more results.
+async function fetchPinterestPage(query, proxy, identity, bookmark = null) {
   const sourceUrl = `/search/pins/?q=${encodeURIComponent(query)}&rs=typed`
   const options = {
     query,
@@ -415,6 +422,7 @@ async function fetchPinterestPage(query, proxy, identity) {
     filters: null,
     rs: 'typed',
     redux_normalize_feed: true,
+    ...(bookmark ? { bookmarks: [bookmark] } : {}),
   }
 
   const params = new URLSearchParams({
@@ -437,7 +445,10 @@ async function fetchPinterestPage(query, proxy, identity) {
     throw new Error('Pinterest returned an unexpected response. Try adding a proxy in Settings.')
   }
 
-  const results = data?.resource_response?.data?.results || []
+  const resourceResponse = data?.resource_response || {}
+  const results = resourceResponse?.data?.results || []
+  const nextBookmark = resourceResponse?.bookmark || null
+  log.info(`Pinterest: HTTP ${res.status}, results=${results.length}, bookmark=${nextBookmark ? 'yes' : 'no'}, status=${resourceResponse?.status ?? 'n/a'}, msg=${String(resourceResponse?.message ?? '').slice(0, 80)}`)
 
   const urls = []
   for (const pin of results) {
@@ -471,34 +482,34 @@ async function fetchPinterestPage(query, proxy, identity) {
     urls.push(...byName.values())
   }
 
-  return urls
+  return { urls, bookmark: nextBookmark }
 }
 
 // Collect up to `limit` image URLs for a single search query.
-// Pinterest's anonymous search API caps every request at one throttled page
-// and never hands back a usable pagination bookmark (confirmed: even with a
-// bootstrapped guest-session cookie it got worse, returning 0 results — the
-// cookie-issuing visit itself reads as bot traffic and taints the session).
-// So instead of chasing real pagination, fire several independent "first
-// page" requests for the same query and de-dupe — Pinterest's anonymous feed
-// isn't perfectly deterministic between calls, so repeats turn up enough new
-// images to approximate pagination.
+// Uses Pinterest's bookmark token for proper pagination when available.
+// Falls back to fresh requests when no bookmark is returned — Pinterest's
+// feed has enough non-determinism that independent calls can surface new images.
+// Stops early only when two consecutive pages yield no new URLs (de-dup exhausted).
 async function searchPins(query, limit, proxy, identity) {
   const collected = []
   const seen = new Set()
-  const MAX_ATTEMPTS = 6
+  let bookmark = null
+  const MAX_PAGES = 20
   let consecutiveEmpty = 0
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS && collected.length < limit; attempt++) {
-    let urls
+  for (let page = 1; page <= MAX_PAGES && collected.length < limit; page++) {
+    let result
     try {
-      urls = await fetchPinterestPage(query, proxy, identity)
+      result = await fetchPinterestPage(query, proxy, identity, bookmark)
     } catch (e) {
-      if (attempt === MAX_ATTEMPTS) throw e
-      log.info(`"${query}" request failed (${attempt}/${MAX_ATTEMPTS}): ${e.message} — retrying…`)
-      await new Promise((r) => setTimeout(r, 800 * attempt))
-      continue
+      if (page === 1) throw e
+      log.info(`"${query}" page ${page} failed: ${e.message} — stopping`)
+      break
     }
+
+    const { urls, bookmark: nextBookmark } = result
+    // Hard stop: Pinterest returned an empty page with no bookmark — nothing more to fetch.
+    if (urls.length === 0 && !nextBookmark) break
 
     let added = 0
     for (const url of urls) {
@@ -511,10 +522,13 @@ async function searchPins(query, limit, proxy, identity) {
     }
 
     consecutiveEmpty = added === 0 ? consecutiveEmpty + 1 : 0
-    // Two attempts in a row with nothing new — Pinterest is giving us the
-    // same throttled set every time, so further attempts won't help.
+    // Stop only when de-dup is truly exhausted (2 pages in a row gave nothing new).
     if (consecutiveEmpty >= 2) break
-    if (collected.length < limit) await new Promise((r) => setTimeout(r, 500))
+
+    // Advance the bookmark if Pinterest provided one; otherwise next iteration
+    // sends a fresh request (bookmark=null) which can yield different images.
+    bookmark = nextBookmark || null
+    if (collected.length < limit) await new Promise((r) => setTimeout(r, 300))
   }
 
   return collected.slice(0, limit)
