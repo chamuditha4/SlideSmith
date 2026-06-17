@@ -211,6 +211,44 @@ function httpsGet(url, headers, proxyUrl, timeout = 30_000) {
   })
 }
 
+// HTTPS POST with form-encoded body and optional proxy.
+function httpsPost(url, headers, body, proxyUrl, timeout = 30_000) {
+  const agent = buildAgent(proxyUrl)
+  const bodyBuf = Buffer.from(body)
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timeout posting to ${url}`)), timeout)
+    const t = new URL(url)
+    const chunks = []
+    const req = https.request(
+      {
+        hostname: t.hostname,
+        port: t.port || 443,
+        path: t.pathname + t.search,
+        method: 'POST',
+        headers: { ...headers, Host: t.hostname, 'Content-Length': String(bodyBuf.length) },
+        agent,
+      },
+      (res) => {
+        res.on('data', (chunk) => chunks.push(chunk))
+        res.on('end', () => {
+          clearTimeout(timer)
+          resolve({
+            ok: res.statusCode >= 200 && res.statusCode < 300,
+            status: res.statusCode,
+            buffer: Buffer.concat(chunks),
+            headers: res.headers,
+          })
+        })
+        res.on('error', (e) => { clearTimeout(timer); reject(e) })
+      }
+    )
+    req.on('error', (e) => { clearTimeout(timer); reject(e) })
+    req.write(bodyBuf)
+    req.end()
+  })
+}
+
 // ── Shared image downloader ──────────────────────────────────────────────────
 
 const IMG_HEADERS = {
@@ -348,26 +386,30 @@ function pick(arr) { return arr[Math.floor(Math.random() * arr.length)] }
 function randomHex(n) { return [...Array(n)].map(() => Math.floor(Math.random() * 16).toString(16)).join('') }
 
 // One randomized-but-consistent "browser" per scrape. Real browsers don't
-// change UA/version mid-session, and Pinterest's guest-session cookies are
-// issued against the UA that requested them — rotating it per-request would
-// make the cookies look stolen/replayed instead of a real returning visitor.
+// change UA/version mid-session, and Pinterest's session state (including
+// bookmark tokens) is tied to the CSRF token that was active when it was
+// issued — rotating it per-request invalidates bookmarks mid-pagination.
 function buildIdentity() {
   return {
     chrome: pick(CHROME_BUILDS),
     macosVer: pick(MACOS_PLATFORM_VERSIONS),
     dpr: Math.random() > 0.6 ? '2' : '1',
     appVersion: randomHex(7),
+    csrfToken: randomHex(32),
   }
 }
 
-// Build request headers matching what a real Chrome browser sends to
-// Pinterest's internal resource API, for a given session identity.
+// Build request headers for Pinterest's search API POST request.
 function buildPinHeaders(query, identity) {
-  const { chrome, macosVer, dpr, appVersion } = identity
+  const { chrome, macosVer, dpr, appVersion, csrfToken } = identity
+  const traceId = randomHex(16)
 
   return {
     'accept': 'application/json, text/javascript, */*, q=0.01',
     'accept-language': 'en-US,en;q=0.9',
+    'content-type': 'application/x-www-form-urlencoded',
+    'cookie': `csrftoken=${csrfToken}`,
+    'origin': 'https://www.pinterest.com',
     'priority': 'u=1, i',
     'referer': 'https://www.pinterest.com/',
     'screen-dpr': dpr,
@@ -382,6 +424,11 @@ function buildPinHeaders(query, identity) {
     'sec-fetch-site': 'same-origin',
     'user-agent': `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome.build} Safari/537.36`,
     'x-app-version': appVersion,
+    'x-b3-flags': '0',
+    'x-b3-traceid': traceId,
+    'x-b3-parentspanid': traceId,
+    'x-b3-spanid': randomHex(16),
+    'x-csrftoken': csrfToken,
     'x-pinterest-appstate': 'active',
     'x-pinterest-pws-handler': 'www/search/[scope].js',
     'x-pinterest-source-url': `/search/pins/?q=${encodeURIComponent(query)}&rs=typed`,
@@ -389,15 +436,16 @@ function buildPinHeaders(query, identity) {
   }
 }
 
-// Fetch one page of results from Pinterest's internal resource API.
+// Fetch one page of results from Pinterest's internal search API (POST form).
 // Returns { urls, bookmark } — bookmark is the pagination token for the next page,
 // or null when Pinterest has no more results.
 async function fetchPinterestPage(query, proxy, identity, bookmark = null) {
+  const { csrfToken } = identity
   const sourceUrl = `/search/pins/?q=${encodeURIComponent(query)}&rs=typed`
   const options = {
     query,
     scope: 'pins',
-    appliedProductFilters: '---',
+    appliedProductFilters: null,
     domains: null,
     user: null,
     seoDrawerEnabled: false,
@@ -410,7 +458,7 @@ async function fetchPinterestPage(query, proxy, identity, bookmark = null) {
     static_feed: false,
     selected_one_bar_modules: null,
     query_pin_sigs: null,
-    page_size: 25,
+    page_size: null,
     price_max: null,
     price_min: null,
     query_image_pins: null,
@@ -425,15 +473,15 @@ async function fetchPinterestPage(query, proxy, identity, bookmark = null) {
     ...(bookmark ? { bookmarks: [bookmark] } : {}),
   }
 
-  const params = new URLSearchParams({
+  const body = new URLSearchParams({
     source_url: sourceUrl,
     data: JSON.stringify({ options, context: {} }),
-    _: String(Date.now()),
-  })
+  }).toString()
 
-  const res = await httpsGet(
-    `https://www.pinterest.com/resource/BaseSearchResource/get/?${params}`,
+  const res = await httpsPost(
+    'https://www.pinterest.com/resource/BaseSearchResource/get/',
     buildPinHeaders(query, identity),
+    body,
     proxy,
     30_000
   )
@@ -508,9 +556,6 @@ async function searchPins(query, limit, proxy, identity) {
     }
 
     const { urls, bookmark: nextBookmark } = result
-    // Hard stop: Pinterest returned an empty page with no bookmark — nothing more to fetch.
-    if (urls.length === 0 && !nextBookmark) break
-
     let added = 0
     for (const url of urls) {
       const name = url.split('/').pop()?.split('?')[0]
@@ -572,7 +617,11 @@ async function scrapeDirect({ searches, count, proxy }) {
   log.ok(`found ${finalUrls.length} image${finalUrls.length === 1 ? '' : 's'} — downloading…`)
 
   const { added, skipped } = await downloadImages(finalUrls, pack, proxy)
-  log.ok(`Added ${added} image${added === 1 ? '' : 's'} to "${pack}"${skipped ? ` (${skipped} skipped)` : ''}`)
+  if (added === 0 && skipped > 0) {
+    log.ok(`All ${skipped} image${skipped === 1 ? '' : 's'} already in library — nothing new to add`)
+  } else {
+    log.ok(`Added ${added} image${added === 1 ? '' : 's'} to "${pack}"${skipped ? ` (${skipped} already in library)` : ''}`)
+  }
   return { added, found: finalUrls.length }
 }
 
