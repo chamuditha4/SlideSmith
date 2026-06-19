@@ -2,6 +2,11 @@
 // is set, the three state JSON files (config, queue, library index) are mirrored
 // to Vercel Blob so they survive cold starts. Without the token the module is a
 // no-op and all I/O stays local — local dev is unaffected.
+//
+// Upload tracking: syncToBlob() registers each upload in _pending. The h()
+// wrapper in app.js intercepts res.json() to call flushBlobSyncs() before the
+// HTTP response bytes are actually sent — so the Lambda cannot be frozen until
+// all writes have landed in Blob.
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -36,6 +41,9 @@ async function push(key, body) {
   })
 }
 
+// Tracks in-flight blob uploads so flushBlobSyncs() can await them all.
+const _pending = new Set()
+
 // Called once at Vercel cold-start: pull all state JSON from blob into `dir`.
 export async function restoreFromBlob(dir) {
   if (!TOKEN) return
@@ -54,10 +62,21 @@ export async function restoreFromBlob(dir) {
   )
 }
 
-// Called after each local write: fire-and-forget push to Vercel Blob.
+// Called after each local write: enqueues a push to Vercel Blob and registers
+// the promise in _pending so flushBlobSyncs() can await it before responding.
 export function syncToBlob(localPath, content) {
   if (!TOKEN) return
   const key = 'slidesmith/' + localPath.split('/').pop()
   const body = typeof content === 'string' ? content : JSON.stringify(content, null, 2)
-  push(key, body).catch((e) => console.warn('[blob] sync failed for', key, ':', e.message))
+  const p = push(key, body)
+    .catch((e) => console.warn('[blob] sync failed for', key, ':', e.message))
+    .finally(() => _pending.delete(p))
+  _pending.add(p)
+}
+
+// Awaits all in-flight blob uploads. Called by the h() wrapper in app.js before
+// sending each HTTP response so writes are durable before the Lambda can freeze.
+export async function flushBlobSyncs() {
+  if (!TOKEN || !_pending.size) return
+  await Promise.allSettled([..._pending])
 }

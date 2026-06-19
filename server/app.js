@@ -26,6 +26,7 @@ import { listAccounts, listPosts, listAnalytics, syncAnalytics, uploadMedia, cre
 import { generateSlideshows } from './generate.js'
 import { listModels, validateKey } from './providers.js'
 import { listLibrary, listPacks, scrapePinterest, removeScraped, getScrapedFile, getScrapedRemoteUrl } from './library.js'
+import { flushBlobSyncs } from './blobSync.js'
 import { logger } from './log.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -58,11 +59,21 @@ if (!process.env.VERCEL) {
   })
 }
 
-// Wrap async handlers so thrown errors become clean 500 JSON instead of crashes.
-const h = (fn) => (req, res) => fn(req, res).catch((e) => {
-  console.error(e)
-  res.status(500).json({ error: e.message || String(e) })
-})
+// Wrap async handlers: flush any pending blob uploads BEFORE the HTTP response
+// bytes leave the process, so the Lambda cannot be frozen mid-write on Vercel.
+const h = (fn) => (req, res) => {
+  // Intercept res.json so we can await all in-flight blob syncs first.
+  const _json = res.json.bind(res)
+  res.json = async (data) => {
+    await flushBlobSyncs()
+    _json(data)
+  }
+  fn(req, res).catch(async (e) => {
+    console.error(e)
+    await flushBlobSyncs().catch(() => {})
+    if (!res.headersSent) _json({ error: e.message || String(e) })
+  })
+}
 
 // ── Config ──────────────────────────────────────────────────────────────────
 app.get('/api/config', h(async (_req, res) => res.json(getConfig())))
@@ -174,6 +185,8 @@ app.post('/api/library/scrape', async (req, res) => {
     console.error(e)
     send({ type: 'error', message: e.message || String(e) })
   }
+  // Flush any blob uploads triggered by the scrape before closing the stream.
+  await flushBlobSyncs().catch(() => {})
   res.end()
 })
 
