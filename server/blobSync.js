@@ -1,56 +1,66 @@
-// Persistent storage adapter for Vercel deployments. When BLOB_READ_WRITE_TOKEN
-// is set, the three state JSON files (config, queue, library index) are mirrored
-// to Vercel Blob so they survive cold starts. Without the token the module is a
-// no-op and all I/O stays local — local dev is unaffected.
-//
-// Upload tracking: syncToBlob() registers each upload in _pending. The h()
-// wrapper in app.js intercepts res.json() to call flushBlobSyncs() before the
-// HTTP response bytes are actually sent — so the Lambda cannot be frozen until
-// all writes have landed in Blob.
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const TOKEN = process.env.BLOB_READ_WRITE_TOKEN
 
-// Download a private blob by pathname. Returns the text content, or null if the
-// blob doesn't exist yet (404). The get() function derives the store URL from
-// the token so we never need to list() or hardcode a store URL.
-async function pull(key) {
-  const { get } = await import('@vercel/blob')
-  const result = await get(key, { access: 'private', token: TOKEN, useCache: false })
-  if (!result || !result.stream) return null
-  // result.stream is the WHATWG ReadableStream from the underlying fetch response.
-  return new Response(result.stream).text()
+// Log once at startup so Vercel function logs immediately show blob status.
+if (TOKEN) {
+  const storeHint = TOKEN.split('_rw_')[1]?.split('_')[0] || '?'
+  console.log(`[blob] ready — store ${storeHint}`)
+} else {
+  console.log('[blob] BLOB_READ_WRITE_TOKEN not set — state will reset on cold start')
 }
 
-// Upload a private blob by pathname. addRandomSuffix: false keeps the pathname
-// stable so we can re-read it by the same key on the next cold start.
+// Derive the private-blob base URL from the token.
+// Token format: vercel_blob_rw_<storeId>_<secret>
+function blobUrl(key) {
+  const storeId = TOKEN?.split('_rw_')[1]?.split('_')[0]?.toLowerCase()
+  if (!storeId) return null
+  return `https://${storeId}.private.blob.vercel-storage.com/${key}`
+}
+
+// Download a private blob by pathname. Returns text content, or null if not found.
+// Uses direct fetch instead of the SDK's get() to avoid stream consumption issues.
+async function pull(key) {
+  const url = blobUrl(key)
+  if (!url) return null
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${TOKEN}` } })
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
+  return res.text()
+}
+
+// Upload a private blob by pathname using the SDK (known to work for put).
 async function push(key, body) {
   const { put } = await import('@vercel/blob')
-  await put(key, body, {
+  const result = await put(key, body, {
     access: 'private',
     addRandomSuffix: false,
     contentType: 'application/json',
     token: TOKEN,
   })
+  console.log('[blob] wrote', key, result.url ? '✓' : '?')
 }
 
 // Tracks in-flight blob uploads so flushBlobSyncs() can await them all.
 const _pending = new Set()
 
-// Called once at Vercel cold-start: pull all state JSON from blob into `dir`.
+// Called once at cold-start: pull all state JSON from blob into `dir`.
 export async function restoreFromBlob(dir) {
   if (!TOKEN) return
   await Promise.all(
     ['config.json', 'queue.json', 'library.json'].map(async (f) => {
       try {
         const content = await pull(`slidesmith/${f}`)
-        if (content == null) return
+        if (content == null) {
+          console.log(`[blob] ${f} not in store yet — starting fresh`)
+          return
+        }
         mkdirSync(dir, { recursive: true })
         writeFileSync(join(dir, f), content)
-        console.log('[blob] restored', f)
+        console.log(`[blob] restored ${f} (${content.length}B)`)
       } catch (e) {
-        console.warn('[blob] restore failed for', f, ':', e.message)
+        console.error('[blob] restore FAILED for', f, ':', e.message)
       }
     })
   )
@@ -63,13 +73,13 @@ export function syncToBlob(localPath, content) {
   const key = 'slidesmith/' + localPath.split('/').pop()
   const body = typeof content === 'string' ? content : JSON.stringify(content, null, 2)
   const p = push(key, body)
-    .catch((e) => console.warn('[blob] sync failed for', key, ':', e.message))
+    .catch((e) => console.error('[blob] sync FAILED for', key, ':', e.message))
     .finally(() => _pending.delete(p))
   _pending.add(p)
 }
 
 // Awaits all in-flight blob uploads. Called by the h() wrapper in app.js before
-// sending each HTTP response so writes are durable before the Lambda can freeze.
+// sending each HTTP response so the Lambda cannot freeze mid-write on Vercel.
 export async function flushBlobSyncs() {
   if (!TOKEN || !_pending.size) return
   await Promise.allSettled([..._pending])
