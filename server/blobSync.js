@@ -12,32 +12,26 @@ import { join } from 'node:path'
 
 const TOKEN = process.env.BLOB_READ_WRITE_TOKEN
 
-// Lazy-import @vercel/blob only when a token is present so local dev without
-// the env var doesn't require the package to be resolvable.
-let _sdk = null
-async function sdk() {
-  if (!_sdk) _sdk = await import('@vercel/blob')
-  return _sdk
-}
-
+// Download a private blob by pathname. Returns the text content, or null if the
+// blob doesn't exist yet (404). The get() function derives the store URL from
+// the token so we never need to list() or hardcode a store URL.
 async function pull(key) {
-  const { list } = await sdk()
-  const { blobs } = await list({ prefix: key, limit: 1 })
-  const match = blobs.find((b) => b.pathname === key)
-  if (!match) return null
-  // Bypass CDN cache so we always get the freshest version.
-  const res = await fetch(match.url + '?t=' + Date.now())
-  if (!res.ok) return null
-  return res.text()
+  const { get } = await import('@vercel/blob')
+  const result = await get(key, { access: 'private', token: TOKEN, useCache: false })
+  if (!result || !result.stream) return null
+  // result.stream is the WHATWG ReadableStream from the underlying fetch response.
+  return new Response(result.stream).text()
 }
 
+// Upload a private blob by pathname. addRandomSuffix: false keeps the pathname
+// stable so we can re-read it by the same key on the next cold start.
 async function push(key, body) {
-  const { put } = await sdk()
+  const { put } = await import('@vercel/blob')
   await put(key, body, {
-    access: 'public',
+    access: 'private',
     addRandomSuffix: false,
     contentType: 'application/json',
-    cacheControlMaxAge: 0,
+    token: TOKEN,
   })
 }
 
