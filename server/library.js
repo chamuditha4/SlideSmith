@@ -299,12 +299,10 @@ async function downloadImages(urls, pack, proxy, onProgress) {
   if (process.env.VERCEL) {
     const TOKEN = process.env.BLOB_READ_WRITE_TOKEN
     if (TOKEN) {
-      // Download each image and store it permanently in Vercel Blob (public CDN).
-      // This avoids Pinterest IP-blocking the on-demand proxy and survives cold starts.
       const { put } = await import('@vercel/blob')
       ensure()
       const index = scrapedIndex()
-      const knownSourceUrls = new Set(index.map((s) => s.sourceUrl).filter(Boolean))
+      const knownSourceUrls = new Set(index.map((s) => s.sourceUrl || s.remoteUrl).filter(Boolean))
       const stamp = Date.now()
       let added = 0, skipped = 0
 
@@ -315,26 +313,35 @@ async function downloadImages(urls, pack, proxy, onProgress) {
           onProgress?.({ phase: 'download', downloaded: added + skipped, total: urls.length })
           continue
         }
+
+        const id = `scraped:${stamp}-${i}-${Math.round(Math.random() * 1e5)}`
+        let entry
+
         try {
-          const r = await httpsGet(url, IMG_HEADERS, proxy, 30_000)
-          if (!r.ok || r.buffer.length < 1024) { skipped++; continue }
-          const ext = (extname(new URL(url).pathname) || '.jpg').slice(0, 5)
-          const id = `scraped:${stamp}-${i}-${Math.round(Math.random() * 1e5)}`
-          const blobKey = `slidesmith/library/${stamp}-${i}${ext || '.jpg'}`
-          const { url: blobUrl } = await put(blobKey, r.buffer, {
+          const res = await fetch(url, { headers: IMG_HEADERS, signal: AbortSignal.timeout(20_000) })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const buf = await res.arrayBuffer()
+          if (buf.byteLength < 1024) throw new Error(`too small (${buf.byteLength}B)`)
+          const ct = res.headers.get('content-type') || 'image/jpeg'
+          const ext = ct.includes('png') ? '.png' : ct.includes('webp') ? '.webp' : '.jpg'
+          const { url: blobUrl } = await put(`slidesmith/library/${stamp}-${i}${ext}`, buf, {
             access: 'public',
             addRandomSuffix: false,
-            contentType: r.headers['content-type'] || 'image/jpeg',
+            contentType: ct,
             token: TOKEN,
           })
-          index.unshift({ id, blobUrl, sourceUrl: url, pack, addedAt: new Date().toISOString() })
-          knownSourceUrls.add(url)
-          added++
-          log.progress(added, urls.length, 'uploaded to blob')
+          entry = { id, blobUrl, sourceUrl: url, pack, addedAt: new Date().toISOString() }
+          log.progress(added + 1, urls.length, 'uploaded to blob')
         } catch (e) {
-          log.warn(`blob upload failed: ${e.message}`)
-          skipped++
+          // Download or blob upload failed — fall back to remoteUrl so the proxy
+          // can serve it on demand. Still counted as added, not silently skipped.
+          log.warn(`blob upload failed (${e.message}), falling back to remoteUrl`)
+          entry = { id, remoteUrl: url, sourceUrl: url, pack, addedAt: new Date().toISOString() }
         }
+
+        index.unshift(entry)
+        knownSourceUrls.add(url)
+        added++
         onProgress?.({ phase: 'download', downloaded: added + skipped, total: urls.length })
       }
 
