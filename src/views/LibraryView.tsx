@@ -3,7 +3,7 @@ import { Loader2, Download, Trash2, CheckSquare, Square } from 'lucide-react';
 import type { LibraryImage } from '../types';
 import { ViewHeader } from '../components/ViewHeader';
 import { Button } from '../components/Button';
-import { getLibrary, deleteLibraryImage, deleteLibraryImages } from '../lib/api';
+import { getLibrary, deleteLibraryImage, deleteLibraryImages, getStoredPassword } from '../lib/api';
 
 type Progress =
   | { phase: 'search'; message: string }
@@ -30,11 +30,19 @@ export function LibraryView() {
     setScraping(true);
     try {
       const queries = searches.split(',').map((s) => s.trim()).filter(Boolean);
+      const password = getStoredPassword();
       const res = await fetch('/api/library/scrape', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          ...(password ? { Authorization: `Bearer ${password}` } : {}),
+        },
         body: JSON.stringify({ searches: queries, count }),
       });
+      if (res.status === 401) {
+        window.dispatchEvent(new Event('slidesmith:unauthorized'));
+        return;
+      }
       if (!res.body) throw new Error('No response body');
 
       const reader = res.body.getReader();

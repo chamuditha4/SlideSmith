@@ -13,12 +13,25 @@ import type {
   LibraryPack,
 } from '../types';
 
+export const getStoredPassword = () => localStorage.getItem('slidesmith_password') ?? '';
+export const setStoredPassword = (p: string) => localStorage.setItem('slidesmith_password', p);
+export const clearStoredPassword = () => localStorage.removeItem('slidesmith_password');
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const password = getStoredPassword();
   const res = await fetch(`/api${path}`, {
-    headers: { 'content-type': 'application/json' },
     cache: 'no-store', // always hit the server — never a stale Schedule/Results list
     ...init,
+    headers: {
+      'content-type': 'application/json',
+      ...(password ? { Authorization: `Bearer ${password}` } : {}),
+      ...(init?.headers as Record<string, string> | undefined),
+    },
   });
+  if (res.status === 401) {
+    clearStoredPassword();
+    throw new Error('__UNAUTHORIZED__');
+  }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((body as { error?: string }).error || res.statusText);
   return body as T;

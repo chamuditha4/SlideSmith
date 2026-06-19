@@ -35,6 +35,17 @@ const genLog = logger('generate')
 export const app = express()
 app.use(express.json({ limit: '50mb' }))
 
+// Password protection: when SLIDESMITH_PASSWORD is set every /api route requires
+// an Authorization: Bearer <password> header. No-op when the var is absent so
+// local dev works without a password.
+const PASS = process.env.SLIDESMITH_PASSWORD?.trim()
+if (PASS) {
+  app.use('/api', (req, res, next) => {
+    if (req.headers.authorization === `Bearer ${PASS}`) return next()
+    res.status(401).json({ error: 'Unauthorized' })
+  })
+}
+
 // DNS-rebinding guard: block requests from unexpected Host headers. Only
 // needed when the server is bound locally (local dev). On Vercel the server
 // isn't listening on a user-reachable socket so this isn't necessary.

@@ -13,6 +13,8 @@ import { BrainView } from './views/BrainView';
 import { SettingsView } from './views/SettingsView';
 import { renderSlideshow } from './lib/render';
 import * as api from './lib/api';
+import { clearStoredPassword } from './lib/api';
+import { LoginScreen } from './components/LoginScreen';
 import type { AppConfig, Project, Slideshow, Slide, SocialAccount, BrainState, ViewKey } from './types';
 
 export default function App() {
@@ -28,6 +30,8 @@ export default function App() {
   const [generateOpen, setGenerateOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [locked, setLocked] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
 
   const activeProvider = config?.provider ?? 'openrouter';
   const hasAiKey = !!(config && config.keys[activeProvider]);
@@ -54,10 +58,26 @@ export default function App() {
         if (!cfg.keys[provider] && !cfg.keys.postbridge) setActiveView('settings');
         if (cfg.keys.postbridge) loadAccounts();
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Could not reach the Slidesmith server.');
+        if (e instanceof Error && e.message === '__UNAUTHORIZED__') {
+          setLocked(true);
+        } else {
+          setError(e instanceof Error ? e.message : 'Could not reach the Slidesmith server.');
+        }
       }
     })();
-  }, [loadAccounts]);
+  }, [loadAccounts, retryKey]);
+
+  // Lock the app globally whenever any fetch returns 401 (e.g. from LibraryView).
+  useEffect(() => {
+    const handler = () => {
+      clearStoredPassword();
+      setConfig(null);
+      setQueue([]);
+      setLocked(true);
+    };
+    window.addEventListener('slidesmith:unauthorized', handler);
+    return () => window.removeEventListener('slidesmith:unauthorized', handler);
+  }, []);
 
   const generate = async (count: number, packs: string[]) => {
     setError(null);
@@ -172,6 +192,15 @@ export default function App() {
     setConfig(await api.deleteProject(id));
     setQueue(await api.getQueue());
   };
+
+  const handleUnlock = () => {
+    setLocked(false);
+    setError(null);
+    setConfig(null);
+    setRetryKey((k) => k + 1);
+  };
+
+  if (locked) return <LoginScreen onUnlock={handleUnlock} />;
 
   if (!config || !activeProject) {
     return (
