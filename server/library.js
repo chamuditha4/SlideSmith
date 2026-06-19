@@ -69,16 +69,17 @@ function reconcileOrphans() {
 }
 
 export function listLibrary() {
-  // Include both file-based entries (local dev) and URL-only entries (Vercel).
   // Reconcile first so orphaned disk files are re-indexed rather than silently lost.
   const scraped = reconcileOrphans()
     .filter((s) => {
-      if (s.remoteUrl && !s.file) return true        // URL-only (Vercel mode)
-      return s.file && existsSync(join(MEDIA_DIR, s.file)) // file-based (local)
+      if (s.blobUrl) return true                            // Vercel Blob (persistent CDN)
+      if (s.remoteUrl && !s.file) return true               // URL-only proxy fallback
+      return s.file && existsSync(join(MEDIA_DIR, s.file))  // local file
     })
     .map((s) => ({
       id: s.id,
-      url: `/api/library/img/${encodeURIComponent(s.id)}`,
+      // Blob-stored images are served directly from Vercel's CDN — no proxy needed.
+      url: s.blobUrl || `/api/library/img/${encodeURIComponent(s.id)}`,
       pack: s.pack || 'Scraped',
       source: 'scraped',
     }))
@@ -139,6 +140,15 @@ export function removeScraped(id) {
   if (rec && rec.file) {
     const p = join(MEDIA_DIR, rec.file)
     if (existsSync(p)) rmSync(p)
+  }
+  // Fire-and-forget blob deletion so this function stays synchronous.
+  if (rec?.blobUrl) {
+    const TOKEN = process.env.BLOB_READ_WRITE_TOKEN
+    if (TOKEN) {
+      import('@vercel/blob')
+        .then(({ del }) => del(rec.blobUrl, { token: TOKEN }))
+        .catch((e) => console.warn('[blob] image delete failed:', e.message))
+    }
   }
   writeJson(INDEX_PATH, index.filter((s) => s.id !== id))
   return listLibrary()
@@ -286,14 +296,58 @@ const IMG_HEADERS = {
 }
 
 async function downloadImages(urls, pack, proxy, onProgress) {
-  // On Vercel skip file downloads — store remote URLs only; /api/library/img/:id proxies on demand.
   if (process.env.VERCEL) {
+    const TOKEN = process.env.BLOB_READ_WRITE_TOKEN
+    if (TOKEN) {
+      // Download each image and store it permanently in Vercel Blob (public CDN).
+      // This avoids Pinterest IP-blocking the on-demand proxy and survives cold starts.
+      const { put } = await import('@vercel/blob')
+      ensure()
+      const index = scrapedIndex()
+      const knownSourceUrls = new Set(index.map((s) => s.sourceUrl).filter(Boolean))
+      const stamp = Date.now()
+      let added = 0, skipped = 0
+
+      for (let i = 0; i < urls.length; i++) {
+        const url = urls[i]
+        if (knownSourceUrls.has(url)) {
+          skipped++
+          onProgress?.({ phase: 'download', downloaded: added + skipped, total: urls.length })
+          continue
+        }
+        try {
+          const r = await httpsGet(url, IMG_HEADERS, proxy, 30_000)
+          if (!r.ok || r.buffer.length < 1024) { skipped++; continue }
+          const ext = (extname(new URL(url).pathname) || '.jpg').slice(0, 5)
+          const id = `scraped:${stamp}-${i}-${Math.round(Math.random() * 1e5)}`
+          const blobKey = `slidesmith/library/${stamp}-${i}${ext || '.jpg'}`
+          const { url: blobUrl } = await put(blobKey, r.buffer, {
+            access: 'public',
+            addRandomSuffix: false,
+            contentType: r.headers['content-type'] || 'image/jpeg',
+            token: TOKEN,
+          })
+          index.unshift({ id, blobUrl, sourceUrl: url, pack, addedAt: new Date().toISOString() })
+          knownSourceUrls.add(url)
+          added++
+          log.progress(added, urls.length, 'uploaded to blob')
+        } catch (e) {
+          log.warn(`blob upload failed: ${e.message}`)
+          skipped++
+        }
+        onProgress?.({ phase: 'download', downloaded: added + skipped, total: urls.length })
+      }
+
+      writeJson(INDEX_PATH, index)
+      return { added, skipped }
+    }
+
+    // Fallback when no blob token: store Pinterest URLs for on-demand proxy.
     ensure()
     const index = scrapedIndex()
     const knownUrls = new Set(index.map((s) => s.remoteUrl).filter(Boolean))
     const stamp = Date.now()
-    let added = 0
-    let skipped = 0
+    let added = 0, skipped = 0
     for (let i = 0; i < urls.length; i++) {
       const url = urls[i]
       if (knownUrls.has(url)) {
