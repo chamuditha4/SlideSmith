@@ -39,6 +39,12 @@ function writeJson(path, value) {
   writeFileSync(path, JSON.stringify(value, null, 2))
   syncToBlob(path, value)
 }
+// Disk-only write: used for internal normalization passes that should never
+// clobber blob (to avoid overwriting user settings with a stale default).
+function writeJsonLocal(path, value) {
+  ensureDir()
+  writeFileSync(path, JSON.stringify(value, null, 2))
+}
 function newId(prefix) {
   return `${prefix}-${Date.now()}-${Math.round(Math.random() * 1e6)}`
 }
@@ -97,7 +103,7 @@ export function getConfig() {
     s.projects.length !== projects.length ||
     s.activeProjectId !== activeProjectId ||
     s.projects.some((p, i) => p.id !== projects[i].id)
-  if (needsPersist) writeJson(CONFIG_PATH, cfg)
+  if (needsPersist) writeJsonLocal(CONFIG_PATH, cfg)
 
   return cfg
 }

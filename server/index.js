@@ -3,6 +3,9 @@
 import { app } from './app.js'
 import { logger } from './log.js'
 import { CONFIG_DIR } from './store.js'
+import { restoreFromBlob } from './blobSync.js'
+
+await restoreFromBlob(CONFIG_DIR)
 
 const PORT = process.env.PORT || 8787
 const HOST = process.env.HOST || '127.0.0.1'
