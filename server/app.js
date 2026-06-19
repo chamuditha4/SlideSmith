@@ -42,6 +42,8 @@ app.use(express.json({ limit: '50mb' }))
 const PASS = process.env.SLIDESMITH_PASSWORD?.trim()
 if (PASS) {
   app.use('/api', (req, res, next) => {
+    // Image proxy is loaded by <img> tags which never send Authorization headers.
+    if (req.path.startsWith('/library/img/')) return next()
     if (req.headers.authorization === `Bearer ${PASS}`) return next()
     res.status(401).json({ error: 'Unauthorized' })
   })
