@@ -36,6 +36,7 @@ async function push(key, body) {
   const result = await put(key, body, {
     access: 'private',
     addRandomSuffix: false,
+    allowOverwrite: true,
     contentType: 'application/json',
     token: TOKEN,
   })
