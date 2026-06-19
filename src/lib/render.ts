@@ -44,6 +44,8 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 
 // Draw an image to cover the whole canvas (object-fit: cover).
 function drawCover(ctx: CanvasRenderingContext2D, img: HTMLImageElement) {
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   const scale = Math.max(W / img.width, H / img.height);
   const w = img.width * scale;
   const h = img.height * scale;

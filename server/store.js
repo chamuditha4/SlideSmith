@@ -9,6 +9,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { bundledPackNames } from './library.js'
+import { syncToBlob } from './blobSync.js'
 
 const DIR = process.env.SLIDESMITH_DIR || join(homedir(), '.slidesmith')
 const CONFIG_PATH = join(DIR, 'config.json')
@@ -36,6 +37,7 @@ function readJson(path, fallback) {
 function writeJson(path, value) {
   ensureDir()
   writeFileSync(path, JSON.stringify(value, null, 2))
+  syncToBlob(path, value)
 }
 function newId(prefix) {
   return `${prefix}-${Date.now()}-${Math.round(Math.random() * 1e6)}`

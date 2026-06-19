@@ -18,7 +18,7 @@ const PALETTE = [
 ]
 
 function buildPrompt(brain, count) {
-  return `You write short-form social media carousel slideshows (TikTok/Instagram).
+  return `You are an expert short-form content strategist for TikTok and Instagram carousels.
 
 Account context:
 - Niche: ${brain.niche || '(unspecified)'}
@@ -28,15 +28,35 @@ Account context:
 What's working for this account (style memory — respect this closely):
 ${brain.styleMemory || '(none yet — use proven short-form patterns)'}
 
+HOOK RULES (slide 1 + "hook" field):
+- Max 8 words but must create an irresistible curiosity gap or make a bold claim
+- Use proven formulas: "Nobody tells you...", "Stop doing X if you want Y", "This one thing changed...", "X mistakes killing your Y", "The truth about X that [audience] won't say", "I tried X for 30 days and..."
+- Must speak directly to the audience's pain or desire — not a generic statement
+- No clickbait that the slides can't back up
+
+SLIDE RULES:
+- 5-7 slides total. Slide 1 = hook. Slides 2-6 = deliver the promised value clearly, one point per slide, max ~8 words each. Last slide = strong CTA (e.g. "Save this before you forget", "Follow for more like this", "Share if this helped").
+- Each slide text should work as a standalone punchy statement — short, scannable, high contrast.
+
+CAPTION RULES (this is critical — short captions kill reach):
+- Write 150-250 words minimum. This is the caption that goes UNDER the post.
+- Open with a hook sentence that mirrors or expands on the carousel hook.
+- Then deliver 2-3 sentences of genuine value or storytelling that deepens what the slides showed.
+- Include a personal/relatable angle or a specific insight that makes the reader feel seen.
+- End with a direct question or CTA that invites comments (comments = reach boost).
+- Use 3-5 relevant emojis naturally woven in — not dumped at the end.
+- Sound like a real person, not a brand. Conversational, not formal.
+- Do NOT pad with filler phrases. Every sentence should earn its place.
+
 Write ${count} distinct slideshows. Respond with a JSON object of this exact shape:
 {
   "slideshows": [
     {
-      "hook": "the first slide — a scroll-stopping line, max ~8 words",
-      "slides": ["the hook again as slide 1", "slide 2", "...5-6 lines total, each max ~8 words, last is a CTA like 'Save this'"],
-      "caption": "the post caption with 1-2 emoji",
-      "hashtags": ["three", "relevant", "hashtags"],
-      "rationale": "one sentence on why this should perform, tied to the style memory"
+      "hook": "the first slide — max 8 words, curiosity-gap or bold claim",
+      "slides": ["slide 1 = hook", "slide 2", "...5-7 slides total, last = CTA"],
+      "caption": "150-250 word caption following the rules above",
+      "hashtags": ["five", "relevant", "niche", "hashtags", "here"],
+      "rationale": "one sentence on why this will perform, tied to the style memory"
     }
   ]
 }

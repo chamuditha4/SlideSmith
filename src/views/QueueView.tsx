@@ -1,4 +1,5 @@
-import { Check, X, Sparkles, RefreshCw, Loader2, Pencil } from 'lucide-react';
+import { useState } from 'react';
+import { Check, X, Sparkles, RefreshCw, Loader2, Pencil, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { Slideshow } from '../types';
 import { ViewHeader } from '../components/ViewHeader';
 import { SlidePreview } from '../components/SlidePreview';
@@ -97,7 +98,7 @@ export function QueueView({
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 max-w-5xl mx-auto">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 max-w-4xl mx-auto">
             {slideshows.map((s) => (
               <SlideshowCard
                 key={s.id}
@@ -126,63 +127,100 @@ interface CardProps {
 }
 
 function SlideshowCard({ slideshow, selected, onToggleSelect, onApprove, onReject, onEdit }: CardProps) {
+  const [activeSlide, setActiveSlide] = useState(0);
+  const [captionExpanded, setCaptionExpanded] = useState(false);
+  const slide = slideshow.slides[activeSlide];
+  const total = slideshow.slides.length;
+
+  const prev = (e: React.MouseEvent) => { e.stopPropagation(); setActiveSlide(i => Math.max(0, i - 1)); };
+  const next = (e: React.MouseEvent) => { e.stopPropagation(); setActiveSlide(i => Math.min(total - 1, i + 1)); };
+
   return (
     <div className={`bg-card border rounded-xl overflow-hidden animate-fadeIn transition-colors ${selected ? 'border-ink ring-1 ring-ink' : 'border-line'}`}>
-      {/* Slide strip */}
-      <div className="relative p-4 bg-surface border-b border-line">
-        <label className="absolute top-2 left-2 z-10 w-6 h-6 rounded-md bg-card/90 border border-line flex items-center justify-center cursor-pointer shadow-sm">
-          <input type="checkbox" checked={selected} onChange={onToggleSelect} className="cursor-pointer" />
-        </label>
-        <div className="grid grid-cols-6 gap-1.5">
-          {slideshow.slides.map((slide) => (
-            <SlidePreview key={slide.id} slide={slide} />
-          ))}
+      {/* TikTok-style body: slide left, caption right */}
+      <div className="flex">
+        {/* Slide preview column */}
+        <div className="relative shrink-0 w-[200px] bg-black">
+          <label className="absolute top-2 left-2 z-10 w-5 h-5 rounded bg-black/60 border border-white/20 flex items-center justify-center cursor-pointer shadow-sm">
+            <input type="checkbox" checked={selected} onChange={onToggleSelect} className="cursor-pointer accent-white" />
+          </label>
+
+          <SlidePreview slide={slide} className="w-full" />
+
+          {activeSlide > 0 && (
+            <button
+              onClick={prev}
+              className="absolute left-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-black/55 flex items-center justify-center text-white hover:bg-black/80 transition-colors"
+            >
+              <ChevronLeft size={14} />
+            </button>
+          )}
+          {activeSlide < total - 1 && (
+            <button
+              onClick={next}
+              className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-black/55 flex items-center justify-center text-white hover:bg-black/80 transition-colors"
+            >
+              <ChevronRight size={14} />
+            </button>
+          )}
+
+          <div className="absolute bottom-1.5 right-1.5 text-[9px] text-white bg-black/60 rounded px-1.5 py-0.5 font-medium">
+            {activeSlide + 1}/{total}
+          </div>
+        </div>
+
+        {/* Caption column */}
+        <div className="flex-1 min-w-0 p-3 flex flex-col">
+          {/* Hook — like TikTok username + bold first line */}
+          <p className="text-[13px] font-bold text-ink leading-snug mb-2">
+            {slideshow.hook}
+          </p>
+
+          {/* Caption — expandable like TikTok description */}
+          <div className="flex-1 min-h-0">
+            <p className={`text-[11px] text-ink-4 leading-relaxed ${captionExpanded ? '' : 'line-clamp-5'}`}>
+              {slideshow.caption}
+            </p>
+            {!captionExpanded && slideshow.caption.length > 120 && (
+              <button
+                onClick={() => setCaptionExpanded(true)}
+                className="text-[11px] text-ink-5 hover:text-ink mt-0.5"
+              >
+                more
+              </button>
+            )}
+          </div>
+
+          {/* Hashtags — inline like TikTok */}
+          <div className="flex flex-wrap gap-x-1.5 gap-y-0.5 mt-2">
+            {slideshow.hashtags.map((tag) => (
+              <span key={tag} className="text-[11px] text-blue-400 font-medium">#{tag}</span>
+            ))}
+          </div>
+
+          {/* Rationale */}
+          <div className="flex items-start gap-1.5 mt-2 pt-2 border-t border-line">
+            <Sparkles size={10} className="text-ink-6 mt-0.5 shrink-0" />
+            <span className="text-[10px] text-ink-6 leading-snug">{slideshow.rationale}</span>
+          </div>
         </div>
       </div>
 
-      {/* Meta */}
-      <div className="p-4">
-        <div className="flex items-start gap-2 mb-2">
-          <Sparkles size={12} className="text-ink-6 mt-1 shrink-0" />
-          <span className="text-[11px] text-ink-5 leading-snug">
-            {slideshow.rationale}
-          </span>
-        </div>
-
-        <h3 className="text-[14px] font-semibold text-ink leading-snug mb-1.5">
-          {slideshow.hook}
-        </h3>
-        <p className="text-[12px] text-ink-4 leading-snug line-clamp-2">
-          {slideshow.caption}
-        </p>
-
-        <div className="flex flex-wrap gap-1 mt-2">
-          {slideshow.hashtags.map((tag) => (
-            <span key={tag} className="text-[10px] text-ink-5 px-1.5 py-0.5 rounded bg-raised">
-              #{tag}
-            </span>
+      {/* Slide dots + actions */}
+      <div className="px-3 pb-3 pt-2 border-t border-line">
+        <div className="flex justify-center gap-1 mb-3">
+          {slideshow.slides.map((_, i) => (
+            <button
+              key={i}
+              onClick={() => setActiveSlide(i)}
+              className={`rounded-full transition-all duration-150 ${i === activeSlide ? 'w-3 h-1.5 bg-ink' : 'w-1.5 h-1.5 bg-line hover:bg-ink-5'}`}
+            />
           ))}
         </div>
-
-        {/* Actions */}
-        <div className="flex items-center gap-2 mt-4 pt-3 border-t border-line">
-          <Button variant="secondary" icon={<Pencil size={13} />} onClick={onEdit}>
-            Edit
-          </Button>
-          <Button
-            variant="primary"
-            icon={<Check size={13} />}
-            onClick={onApprove}
-            fullWidth
-          >
-            Approve
-          </Button>
-          <IconButton
-            variant="secondary"
-            icon={<X size={13} />}
-            label="Reject"
-            onClick={onReject}
-          />
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" icon={<Pencil size={13} />} onClick={onEdit}>Edit</Button>
+          <Button variant="primary" icon={<Check size={13} />} onClick={onApprove} fullWidth>Approve</Button>
+          <IconButton variant="secondary" icon={<X size={13} />} label="Reject" onClick={onReject} />
         </div>
       </div>
     </div>

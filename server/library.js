@@ -12,6 +12,7 @@ import http from 'node:http'
 import https from 'node:https'
 import tls from 'node:tls'
 import { logger } from './log.js'
+import { syncToBlob } from './blobSync.js'
 
 const log = logger('scrape')
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -146,6 +147,7 @@ export function removeScraped(id) {
 function writeJson(p, v) {
   ensure()
   writeFileSync(p, JSON.stringify(v, null, 2))
+  syncToBlob(p, v)
 }
 
 // ── HTTP/HTTPS helper with optional proxy tunnel ─────────────────────────────
