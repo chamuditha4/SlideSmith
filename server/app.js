@@ -128,19 +128,17 @@ app.post('/api/generate', h(async (req, res) => {
   const slideshows = await generateSlideshows({ apiKey, model, brain: project.brain, provider, count })
 
   const packs = Array.isArray(req.body?.packs) ? req.body.packs : project.imagePacks || []
-  // Exclude remoteUrl-only images: they're cross-origin and taint the export canvas.
-  const pool = packs.length
-    ? listLibrary().filter((i) => packs.includes(i.pack) && i.canvasReady !== false)
-    : []
+  const pool = packs.length ? listLibrary().filter((i) => packs.includes(i.pack)) : []
   if (pool.length) {
     genLog.step(`assigning backgrounds from ${packs.length} pack${packs.length === 1 ? '' : 's'} (${pool.length} images)`)
     for (const show of slideshows) {
       const used = new Set()
       for (const slide of show.slides) {
-        const fresh = pool.filter((i) => !used.has(i.url))
+        const fresh = pool.filter((i) => !used.has(i.renderUrl || i.url))
         const pick = (fresh.length ? fresh : pool)[Math.floor(Math.random() * (fresh.length || pool.length))]
-        slide.imageUrl = pick.url
-        used.add(pick.url)
+        // Use renderUrl for canvas drawing (same-origin → no taint); fall back to url for bundled images.
+        slide.imageUrl = pick.renderUrl || pick.url
+        used.add(pick.renderUrl || pick.url)
       }
     }
   }

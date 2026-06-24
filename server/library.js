@@ -37,7 +37,6 @@ function bundled() {
       url: `/library/${path}`,
       pack: pack.name,
       source: 'bundled',
-      canvasReady: true,
     }))
   )
 }
@@ -79,15 +78,18 @@ export function listLibrary() {
     })
     .map((s) => ({
       id: s.id,
-      // blobUrl → Vercel CDN (CORS-enabled, canvas-safe).
-      // remoteUrl → serve direct from Pinterest so the browser can display it
-      //   without relying on a proxy that may run on a different Lambda instance.
-      // proxy  → local file served same-origin (local dev only).
+      // url: used by <img> tags in the library UI.
+      //   blobUrl → Vercel CDN, best option.
+      //   remoteUrl → direct Pinterest URL; avoids cross-Lambda proxy 404s in the library view.
+      //   proxy → local-dev same-origin file serving.
       url: s.blobUrl || s.remoteUrl || `/api/library/img/${encodeURIComponent(s.id)}`,
+      // renderUrl: used for canvas drawing when generating slides.
+      //   Must be same-origin so the canvas is never tainted.
+      //   blobUrl has CORS * so it's also canvas-safe.
+      //   remoteUrl is cross-origin → would taint canvas → export breaks, so we use the proxy instead.
+      renderUrl: s.blobUrl || `/api/library/img/${encodeURIComponent(s.id)}`,
       pack: s.pack || 'Scraped',
       source: 'scraped',
-      // remoteUrl-only entries are cross-origin and taint the canvas; exclude from slides.
-      canvasReady: !!(s.blobUrl || s.file),
     }))
   // Scraped first (newest), then the bundled packs.
   return [...scraped, ...bundled()]
