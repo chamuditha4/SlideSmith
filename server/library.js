@@ -37,6 +37,7 @@ function bundled() {
       url: `/library/${path}`,
       pack: pack.name,
       source: 'bundled',
+      canvasReady: true,
     }))
   )
 }
@@ -78,10 +79,15 @@ export function listLibrary() {
     })
     .map((s) => ({
       id: s.id,
-      // Blob-stored images are served directly from Vercel's CDN — no proxy needed.
-      url: s.blobUrl || `/api/library/img/${encodeURIComponent(s.id)}`,
+      // blobUrl → Vercel CDN (CORS-enabled, canvas-safe).
+      // remoteUrl → serve direct from Pinterest so the browser can display it
+      //   without relying on a proxy that may run on a different Lambda instance.
+      // proxy  → local file served same-origin (local dev only).
+      url: s.blobUrl || s.remoteUrl || `/api/library/img/${encodeURIComponent(s.id)}`,
       pack: s.pack || 'Scraped',
       source: 'scraped',
+      // remoteUrl-only entries are cross-origin and taint the canvas; exclude from slides.
+      canvasReady: !!(s.blobUrl || s.file),
     }))
   // Scraped first (newest), then the bundled packs.
   return [...scraped, ...bundled()]
@@ -321,7 +327,7 @@ async function downloadImages(urls, pack, proxy, onProgress) {
           const res = await fetch(url, { headers: IMG_HEADERS, signal: AbortSignal.timeout(20_000) })
           if (!res.ok) throw new Error(`HTTP ${res.status}`)
           const buf = await res.arrayBuffer()
-          if (buf.byteLength < 1024) throw new Error(`too small (${buf.byteLength}B)`)
+          if (buf.byteLength < 30_000) throw new Error(`too small (${buf.byteLength}B) — low-res image rejected`)
           const ct = res.headers.get('content-type') || 'image/jpeg'
           const ext = ct.includes('png') ? '.png' : ct.includes('webp') ? '.webp' : '.jpg'
           const { url: blobUrl } = await put(`slidesmith/library/${stamp}-${i}${ext}`, buf, {
@@ -385,7 +391,7 @@ async function downloadImages(urls, pack, proxy, onProgress) {
       if (sourceFile && knownSourceFiles.has(sourceFile)) { skipped++; continue }
 
       const r = await httpsGet(url, IMG_HEADERS, proxy, 30_000)
-      if (!r.ok || r.buffer.length < 1024) { skipped++; continue }
+      if (!r.ok || r.buffer.length < 30_000) { skipped++; continue }
       const ext = (extname(new URL(url).pathname) || '.jpg').slice(0, 5)
       const id = `scraped:${Date.now()}-${Math.round(Math.random() * 1e6)}`
       const file = `${id.replace('scraped:', '')}${ext}`
@@ -413,24 +419,25 @@ async function downloadImages(urls, pack, proxy, onProgress) {
 function pinImageUrls(items) {
   const list = Array.isArray(items) ? items : []
 
-  // 1) Structured: media.images.{original|large|...}
+  // 1) Structured: media.images.{original|large|...} — high-quality variants only
   const structured = new Set()
   for (const item of list) {
     if (item && typeof item === 'object') {
       if (item.type && item.type !== 'pin') continue
       const s = item?.media?.images
-      const chosen = s?.original ?? s?.orig ?? s?.large ?? s?.medium ?? s?.small
+      const chosen = s?.original ?? s?.orig ?? s?.large
       if (chosen?.url) structured.add(String(chosen.url).replace(/&amp;/g, '&'))
     }
   }
   if (structured.size) return [...structured]
 
-  // 2) Fallback: scan the whole blob for pinimg URLs. Prefer /originals/.
+  // 2) Fallback: scan the whole blob for pinimg URLs. Prefer /originals/, skip low-res paths.
   const blob = JSON.stringify(list)
   const matches = blob.match(/https?:\\?\/\\?\/[^"'\\\s]*pinimg\.com[^"'\\\s]*/gi) || []
   const cleaned = matches
     .map((u) => u.replace(/\\\//g, '/').replace(/&amp;/g, '&'))
     .filter((u) => /\.(jpe?g|png|webp)/i.test(u))
+    .filter((u) => !/\/(?:236x|474x|60x60)\//i.test(u))
   const originals = cleaned.filter((u) => /\/originals\//i.test(u))
   const byName = new Map()
   for (const u of [...originals, ...cleaned]) {
@@ -653,24 +660,28 @@ async function fetchPinterestPage(query, proxy, identity, bookmark = null) {
     if (!pin || typeof pin !== 'object') continue
     if (pin.type && pin.type !== 'pin') continue
 
-    // Tier 1: standard shape — pin.images.{orig|736x|…}
+    // Tier 1: standard shape — pin.images.{orig|736x} — high-quality only
     const imgs = pin.images
-    const img1 = imgs?.orig ?? imgs?.['736x'] ?? imgs?.['474x'] ?? imgs?.['236x']
+    const img1 = imgs?.orig ?? imgs?.['736x']
     if (img1?.url) { urls.push(String(img1.url).replace(/&amp;/g, '&')); continue }
 
-    // Tier 2: redux_normalize_feed shape — pin.media.images.{original|large|…}
+    // Tier 2: redux_normalize_feed shape — original/orig only; skip 'large' (<736px on most pins)
     const mImgs = pin.media?.images
-    const img2 = mImgs?.original ?? mImgs?.orig ?? mImgs?.large ?? mImgs?.['736x']
+    const img2 = mImgs?.original ?? mImgs?.orig ?? mImgs?.['736x']
     if (img2?.url) { urls.push(String(img2.url).replace(/&amp;/g, '&')); continue }
   }
 
-  // Tier 3: blob scan fallback — catches any other shape by grepping for pinimg.com URLs
+  // Tier 3: blob scan fallback — catches any other shape by grepping for pinimg.com URLs.
+  // Low-res path segments (236x, 474x, 60x60) are rejected; remaining URLs are upgraded
+  // to 736x so we don't silently accept thumbnails.
   if (urls.length === 0 && results.length > 0) {
     const blob = JSON.stringify(results)
     const matches = blob.match(/https?:\\?\/\\?\/[^"'\\\s]*pinimg\.com[^"'\\\s]*/gi) || []
     const cleaned = matches
       .map((u) => u.replace(/\\\//g, '/').replace(/&amp;/g, '&'))
       .filter((u) => /\.(jpe?g|png|webp)/i.test(u))
+      .filter((u) => !/\/(?:236x|474x|60x60)\//i.test(u))
+    // Prefer /originals/ over /736x/ for the same image filename.
     const originals = cleaned.filter((u) => /\/originals\//i.test(u))
     const byName = new Map()
     for (const u of [...originals, ...cleaned]) {

@@ -128,7 +128,10 @@ app.post('/api/generate', h(async (req, res) => {
   const slideshows = await generateSlideshows({ apiKey, model, brain: project.brain, provider, count })
 
   const packs = Array.isArray(req.body?.packs) ? req.body.packs : project.imagePacks || []
-  const pool = packs.length ? listLibrary().filter((i) => packs.includes(i.pack)) : []
+  // Exclude remoteUrl-only images: they're cross-origin and taint the export canvas.
+  const pool = packs.length
+    ? listLibrary().filter((i) => packs.includes(i.pack) && i.canvasReady !== false)
+    : []
   if (pool.length) {
     genLog.step(`assigning backgrounds from ${packs.length} pack${packs.length === 1 ? '' : 's'} (${pool.length} images)`)
     for (const show of slideshows) {
