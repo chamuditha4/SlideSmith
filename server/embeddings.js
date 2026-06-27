@@ -34,14 +34,21 @@ function jaccardSim(a, b) {
 }
 
 async function openaiEmbed(text, apiKey, base) {
-  const res = await fetch(`${base}/embeddings`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ model: 'text-embedding-3-small', input: text, dimensions: EMBED_DIM }),
-  })
-  const body = await res.json().catch(() => null)
-  if (!res.ok) throw new Error(`Embeddings ${res.status}: ${body?.error?.message || res.statusText}`)
-  return body?.data?.[0]?.embedding ?? null
+  const abort = new AbortController()
+  const timer = setTimeout(() => abort.abort(), 8000)
+  try {
+    const res = await fetch(`${base}/embeddings`, {
+      method: 'POST',
+      signal: abort.signal,
+      headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'text-embedding-3-small', input: text, dimensions: EMBED_DIM }),
+    })
+    const body = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(`Embeddings ${res.status}: ${body?.error?.message || res.statusText}`)
+    return body?.data?.[0]?.embedding ?? null
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 // Returns a 256-dim float array, or null (triggers trigram fallback during comparison).
@@ -54,15 +61,18 @@ export async function embedText(text, embeddingKey) {
 }
 
 // Returns true if text is too similar to any existing entry.
-// Uses cosine similarity when embeddings are available on both sides;
-// falls back to trigram Jaccard otherwise.
+// Rules:
+//   both have embeddings  → cosine similarity (accurate)
+//   both have null        → trigram Jaccard (best we can do)
+//   one side is null      → skip (can't compare accurately; don't block generation)
 export function isDuplicate(text, embedding, existingEntries) {
   for (const entry of existingEntries) {
     if (embedding && entry.embedding) {
       if (cosineSimilarity(embedding, entry.embedding) >= SIMILARITY_THRESHOLD) return true
-    } else {
+    } else if (!embedding && !entry.embedding) {
       if (jaccardSim(text, entry.text) >= JACCARD_THRESHOLD) return true
     }
+    // mismatched (one null, one not): skip — can't do a meaningful comparison
   }
   return false
 }
