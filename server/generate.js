@@ -84,8 +84,15 @@ export async function generateSlideshows({ apiKey, model, brain, provider = 'ope
   const { entries: storedQuotes } = getQuotes()
   const projectQuotes = storedQuotes.filter((e) => !projectId || e.projectId === projectId)
 
+  if (embeddingKey) {
+    log.info('embedding key present — using OpenAI text-embedding-3-small for dedup')
+  } else {
+    log.warn('no embedding key — falling back to trigram similarity for dedup')
+  }
+
   const accepted = []       // raw model outputs that passed dedup
   const newEntries = []     // quote index entries to persist after we're done
+  let embedError = false    // flip once so we only warn about embedding failures once
   let safety = 0
 
   while (accepted.length < count && safety < MAX_ATTEMPTS(count)) {
@@ -101,7 +108,17 @@ export async function generateSlideshows({ apiKey, model, brain, provider = 'ope
 
     // Embed all hooks in this batch in parallel (falls back to trigrams if no embeddingKey).
     const hookTexts = batch.map((s) => s.hook || (s.slides && s.slides[0]) || '')
-    const embeddings = await Promise.all(hookTexts.map((t) => embedText(t, embeddingKey)))
+    const embeddings = await Promise.all(
+      hookTexts.map((t) =>
+        embedText(t, embeddingKey).catch((e) => {
+          if (!embedError) {
+            log.warn(`embedding API failed (${e.message}) — falling back to trigram similarity`)
+            embedError = true
+          }
+          return null
+        })
+      )
+    )
 
     for (let i = 0; i < batch.length; i++) {
       if (accepted.length >= count) break

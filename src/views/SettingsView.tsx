@@ -247,7 +247,7 @@ export function SettingsView({
             )}
             <Field
               label={<>OpenAI key for duplicate detection <span className="text-ink-6 font-normal normal-case tracking-normal">(optional)</span></>}
-              hint="Used only for semantic dedup — not for generation. Lets you use DeepSeek or Claude for writing while still checking for similar hooks via OpenAI embeddings. Leave blank to use text-based matching instead."
+              hint="Used only for dedup, not for generation. If you're using the OpenAI provider, your generation key is already used as a fallback — only set this if you want a separate key or use a different generation provider."
             >
               <input
                 value={embeddingKey}

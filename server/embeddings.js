@@ -45,16 +45,12 @@ async function openaiEmbed(text, apiKey, base) {
 }
 
 // Returns a 256-dim float array, or null (triggers trigram fallback during comparison).
+// Throws on API errors so the caller (generate.js) can log them properly.
 // embeddingKey is the dedicated OpenAI key from Settings — independent of the
 // generation provider so you can use DeepSeek/Claude for writing and OpenAI for dedup.
 export async function embedText(text, embeddingKey) {
   if (!embeddingKey) return null
-  try {
-    return await openaiEmbed(text, embeddingKey, 'https://api.openai.com/v1')
-  } catch (e) {
-    console.warn('[embed] API failed, using trigram fallback:', e.message)
-    return null
-  }
+  return openaiEmbed(text, embeddingKey, 'https://api.openai.com/v1')
 }
 
 // Returns true if text is too similar to any existing entry.
