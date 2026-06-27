@@ -19,6 +19,7 @@ import {
   getQueue,
   setQueue,
   addToQueue,
+  addQuotes,
   removeFromQueue,
   CONFIG_DIR,
 } from './store.js'
@@ -125,7 +126,7 @@ app.post('/api/generate', h(async (req, res) => {
   const project = getActiveProject()
   const count = Math.min(Math.max(Math.round(Number(req.body?.count) || 4), 1), 100)
   const apiKey = keys[provider] || ''
-  const slideshows = await generateSlideshows({ apiKey, model, brain: project.brain, provider, count, projectId: project.id, embeddingKey: keys.embeddingKey || keys.openai || '' })
+  const { slideshows, quoteEntries } = await generateSlideshows({ apiKey, model, brain: project.brain, provider, count, projectId: project.id, embeddingKey: keys.embeddingKey || keys.openai || '' })
 
   const packs = Array.isArray(req.body?.packs) ? req.body.packs : project.imagePacks || []
   const pool = packs.length ? listLibrary().filter((i) => packs.includes(i.pack)) : []
@@ -136,14 +137,21 @@ app.post('/api/generate', h(async (req, res) => {
       for (const slide of show.slides) {
         const fresh = pool.filter((i) => !used.has(i.renderUrl || i.url))
         const pick = (fresh.length ? fresh : pool)[Math.floor(Math.random() * (fresh.length || pool.length))]
-        // Use renderUrl for canvas drawing (same-origin → no taint); fall back to url for bundled images.
         slide.imageUrl = pick.renderUrl || pick.url
         used.add(pick.renderUrl || pick.url)
       }
     }
   }
 
+  // Queue first — this must succeed before anything else.
   addToQueue(project.id, slideshows)
+
+  // Quotes index is best-effort: if it fails for any reason, the queue is already
+  // saved so the user still gets their slideshows.
+  if (quoteEntries.length) {
+    try { addQuotes(quoteEntries) } catch (e) { console.error('[quotes] persist failed:', e.message) }
+  }
+
   res.json(slideshows)
 }))
 

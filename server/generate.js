@@ -7,7 +7,7 @@
 // generations skip hooks that are too similar to stored ones, then try again
 // until the requested count of unique slideshows is reached.
 import { chatJSON } from './providers.js'
-import { getQuotes, addQuotes } from './store.js'
+import { getQuotes } from './store.js'
 import { embedText, isDuplicate } from './embeddings.js'
 import { logger } from './log.js'
 
@@ -171,11 +171,10 @@ export async function generateSlideshows({ apiKey, model, brain, provider = 'ope
     }
   }
 
-  if (newEntries.length) addQuotes(newEntries)
   log.ok(`Generated ${accepted.length} unique slideshow${accepted.length === 1 ? '' : 's'}`)
 
   const stamp = Date.now()
-  return accepted.slice(0, count).map((s, i) => {
+  const slideshows = accepted.slice(0, count).map((s, i) => {
     const [from, to] = PALETTE[i % PALETTE.length]
     return {
       id: `q-${stamp}-${i}`,
@@ -192,4 +191,9 @@ export async function generateSlideshows({ apiKey, model, brain, provider = 'ope
       })),
     }
   })
+
+  // Return both the slideshows and the quote entries so the caller (app.js) can
+  // persist them independently — if quote persistence fails it must NOT prevent
+  // the slideshows from being added to the queue.
+  return { slideshows, quoteEntries: newEntries }
 }
