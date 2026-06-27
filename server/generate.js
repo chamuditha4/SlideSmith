@@ -23,7 +23,11 @@ const PALETTE = [
   ['#26120a', '#1a0c06'],
 ]
 
-function buildPrompt(brain, count) {
+function buildPrompt(brain, count, recentHooks = []) {
+  const avoidSection = recentHooks.length
+    ? `\nHOOKS ALREADY USED — do not repeat or closely paraphrase any of these:\n${recentHooks.map((h) => `- "${h}"`).join('\n')}\n`
+    : ''
+
   return `You are an expert short-form content strategist for TikTok and Instagram carousels.
 
 Account context:
@@ -33,7 +37,7 @@ Account context:
 
 What's working for this account (style memory — respect this closely):
 ${brain.styleMemory || '(none yet — use proven short-form patterns)'}
-
+${avoidSection}
 HOOK RULES (slide 1 + "hook" field):
 - Max 8 words but must create an irresistible curiosity gap or make a bold claim
 - Use proven formulas: "Nobody tells you...", "Stop doing X if you want Y", "This one thing changed...", "X mistakes killing your Y", "The truth about X that [audience] won't say", "I tried X for 30 days and..."
@@ -84,6 +88,12 @@ export async function generateSlideshows({ apiKey, model, brain, provider = 'ope
   const { entries: storedQuotes } = getQuotes()
   const projectQuotes = storedQuotes.filter((e) => !projectId || e.projectId === projectId)
 
+  // Recent 100 hooks injected into the prompt so the model actively avoids them.
+  const recentHooks = projectQuotes
+    .filter((e) => e.type === 'hook')
+    .slice(-100)
+    .map((e) => e.text)
+
   if (embeddingKey) {
     log.info('embedding key present — using OpenAI text-embedding-3-small for dedup')
   } else {
@@ -97,7 +107,7 @@ export async function generateSlideshows({ apiKey, model, brain, provider = 'ope
     safety++
     const n = Math.min(BATCH, count - raw.length)
     log.step(`asking model for ${n} more (${raw.length}/${count} so far)…`)
-    const parsed = await chatJSON({ apiKey, model, prompt: buildPrompt(brain, n), provider })
+    const parsed = await chatJSON({ apiKey, model, prompt: buildPrompt(brain, n, recentHooks), provider })
     const batch = parsed.slideshows || []
     if (!batch.length) { log.warn('model returned no slideshows — stopping early'); break }
     raw.push(...batch)
@@ -140,8 +150,8 @@ export async function generateSlideshows({ apiKey, model, brain, provider = 'ope
 
     accepted.push(raw[i])
 
-    // Store the hook entry (used for rejection checks in future runs).
-    newEntries.push({ text: hookText, embedding: hookEmbedding, projectId, createdAt: now })
+    // Store the hook entry (used for rejection checks and prompt injection in future runs).
+    newEntries.push({ type: 'hook', text: hookText, embedding: hookEmbedding, projectId, createdAt: now })
 
     // Also store every non-CTA body slide for history (no rejection — just indexing).
     const bodySlides = (raw[i].slides || []).slice(1, -1)  // skip hook (0) and CTA (last)
