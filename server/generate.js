@@ -90,71 +90,64 @@ export async function generateSlideshows({ apiKey, model, brain, provider = 'ope
     log.warn('no embedding key — falling back to trigram similarity for dedup')
   }
 
-  const accepted = []       // raw model outputs that passed dedup
-  const newEntries = []     // quote index entries to persist after we're done
-  let embedError = false    // flip once so we only warn about embedding failures once
+  // Generate all requested slideshows in one pass (with batching for large counts).
+  const raw = []
   let safety = 0
-
-  while (accepted.length < count && safety < MAX_ATTEMPTS(count)) {
+  while (raw.length < count && safety < count + 5) {
     safety++
-    const n = Math.min(BATCH, count - accepted.length)
-    log.step(`asking model for ${n} more (${accepted.length}/${count} unique so far)…`)
+    const n = Math.min(BATCH, count - raw.length)
+    log.step(`asking model for ${n} more (${raw.length}/${count} so far)…`)
     const parsed = await chatJSON({ apiKey, model, prompt: buildPrompt(brain, n), provider })
     const batch = parsed.slideshows || []
-    if (!batch.length) {
-      log.warn('model returned no slideshows — stopping early')
-      break
-    }
+    if (!batch.length) { log.warn('model returned no slideshows — stopping early'); break }
+    raw.push(...batch)
+  }
 
-    // For each slideshow, collect all slide texts except the last (which is always
-    // a formulaic CTA — "Save this", "Follow for more" — and repeats by design).
-    const slideSets = batch.map((s) => {
-      const slides = s.slides || []
-      return slides.length > 1 ? slides.slice(0, -1) : slides
-    })
-
-    // Embed every slide in every slideshow in parallel.
-    const now = new Date().toISOString()
-    const embeddingSets = await Promise.all(
-      slideSets.map((slides) =>
-        Promise.all(
-          slides.map((t) =>
-            embedText(t, embeddingKey).catch((e) => {
-              if (!embedError) {
-                log.warn(`embedding API failed (${e.message}) — falling back to trigram similarity`)
-                embedError = true
-              }
-              return null
-            })
-          )
-        )
-      )
+  // Embed the hook of every raw slideshow in parallel.
+  // The hook (slide[0]) is the unique fingerprint of the slideshow — we reject on
+  // hook similarity only. Body slides are stored for history but not used for rejection,
+  // because body content from the same niche is naturally topically similar and cosine
+  // similarity would flag valid distinct slideshows as duplicates.
+  let embedError = false
+  const hookTexts = raw.map((s) => s.hook || (s.slides?.[0]) || '')
+  const hookEmbeddings = await Promise.all(
+    hookTexts.map((t) =>
+      embedText(t, embeddingKey).catch((e) => {
+        if (!embedError) {
+          log.warn(`embedding API failed (${e.message}) — falling back to trigram similarity`)
+          embedError = true
+        }
+        return null
+      })
     )
+  )
 
-    for (let i = 0; i < batch.length; i++) {
-      if (accepted.length >= count) break
-      const slides = slideSets[i]
-      const embeddings = embeddingSets[i]
-      const allEntries = [...projectQuotes, ...newEntries]
+  // Filter: keep slideshows whose hook is unique against stored hooks + accepted hooks so far.
+  const accepted = []
+  const newEntries = []
+  const now = new Date().toISOString()
 
-      // Reject the whole slideshow if any individual slide is a duplicate.
-      let dupText = null
-      for (let j = 0; j < slides.length; j++) {
-        if (isDuplicate(slides[j], embeddings[j], allEntries)) { dupText = slides[j]; break }
-      }
-      if (dupText) {
-        log.warn(`deduped: "${dupText}"`)
-        continue
-      }
+  for (let i = 0; i < raw.length; i++) {
+    if (accepted.length >= count) break
+    const hookText = hookTexts[i]
+    const hookEmbedding = hookEmbeddings[i]
+    const allEntries = [...projectQuotes, ...newEntries]
 
-      accepted.push(batch[i])
-      // Store every checked slide so future generations can't reproduce any of them.
-      for (let j = 0; j < slides.length; j++) {
-        newEntries.push({ text: slides[j], embedding: embeddings[j], projectId, createdAt: now })
-      }
+    if (isDuplicate(hookText, hookEmbedding, allEntries)) {
+      log.warn(`deduped hook: "${hookText}"`)
+      continue
     }
 
-    log.progress(accepted.length, count, 'unique')
+    accepted.push(raw[i])
+
+    // Store the hook entry (used for rejection checks in future runs).
+    newEntries.push({ text: hookText, embedding: hookEmbedding, projectId, createdAt: now })
+
+    // Also store every non-CTA body slide for history (no rejection — just indexing).
+    const bodySlides = (raw[i].slides || []).slice(1, -1)  // skip hook (0) and CTA (last)
+    for (const slideText of bodySlides) {
+      newEntries.push({ text: slideText, embedding: null, projectId, createdAt: now })
+    }
   }
 
   if (newEntries.length) addQuotes(newEntries)

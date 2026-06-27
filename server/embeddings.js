@@ -4,8 +4,8 @@
 // Fallback: character trigram Jaccard similarity (no API key required).
 
 const EMBED_DIM = 256
-export const SIMILARITY_THRESHOLD = 0.85  // cosine — below this = unique enough
-const JACCARD_THRESHOLD = 0.5             // trigram Jaccard fallback threshold
+export const SIMILARITY_THRESHOLD = 0.92  // cosine — near-exact semantic match only
+const JACCARD_THRESHOLD = 0.72            // trigram Jaccard — very similar text only
 
 export function cosineSimilarity(a, b) {
   let dot = 0, na = 0, nb = 0
