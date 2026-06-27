@@ -25,7 +25,7 @@ const PALETTE = [
 
 function buildPrompt(brain, count, recentHooks = []) {
   const avoidSection = recentHooks.length
-    ? `\nHOOKS ALREADY USED — do not repeat or closely paraphrase any of these:\n${recentHooks.map((h) => `- "${h}"`).join('\n')}\n`
+    ? `\nHOOKS ALREADY IN THE BANK (${recentHooks.length} total) — these angles are taken. Write from completely different angles, formulas, and framings. Do not reuse the same premise even with different words:\n${recentHooks.map((h, i) => `${i + 1}. ${h}`).join('\n')}\n`
     : ''
 
   return `You are an expert short-form content strategist for TikTok and Instagram carousels.
@@ -88,11 +88,14 @@ export async function generateSlideshows({ apiKey, model, brain, provider = 'ope
   const { entries: storedQuotes } = getQuotes()
   const projectQuotes = storedQuotes.filter((e) => !projectId || e.projectId === projectId)
 
-  // Recent 100 hooks injected into the prompt so the model actively avoids them.
+  // Recent hooks injected into the prompt so the model actively avoids them.
+  // Cap at 30 — beyond that the list gets so long models start refusing to generate.
   const recentHooks = projectQuotes
     .filter((e) => e.type === 'hook')
-    .slice(-100)
+    .slice(-30)
     .map((e) => e.text)
+
+  if (recentHooks.length) log.info(`injecting ${recentHooks.length} existing hook(s) into prompt`)
 
   if (embeddingKey) {
     log.info('embedding key present — using OpenAI text-embedding-3-small for dedup')
@@ -103,15 +106,23 @@ export async function generateSlideshows({ apiKey, model, brain, provider = 'ope
   // Generate all requested slideshows in one pass (with batching for large counts).
   const raw = []
   let safety = 0
+  let emptyBatches = 0
   while (raw.length < count && safety < count + 5) {
     safety++
     const n = Math.min(BATCH, count - raw.length)
     log.step(`asking model for ${n} more (${raw.length}/${count} so far)…`)
     const parsed = await chatJSON({ apiKey, model, prompt: buildPrompt(brain, n, recentHooks), provider })
     const batch = parsed.slideshows || []
-    if (!batch.length) { log.warn('model returned no slideshows — stopping early'); break }
+    if (!batch.length) {
+      emptyBatches++
+      log.warn(`model returned no slideshows (attempt ${emptyBatches})`)
+      if (emptyBatches >= 2) break  // give up after two consecutive empty responses
+      continue
+    }
+    emptyBatches = 0
     raw.push(...batch)
   }
+  log.info(`raw batch: ${raw.length} slideshow(s) before dedup`)
 
   // Embed the hook of every raw slideshow in parallel.
   // The hook (slide[0]) is the unique fingerprint of the slideshow — we reject on
