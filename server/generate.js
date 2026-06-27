@@ -2,7 +2,13 @@
 // reference patterns), the chosen model writes N carousel slideshows: a hook,
 // caption, hashtags, a rationale, and the per-slide text. Images are rendered
 // later, client-side — the model only writes the words.
+//
+// Dedup: every accepted hook is embedded and stored in quotes.json. Subsequent
+// generations skip hooks that are too similar to stored ones, then try again
+// until the requested count of unique slideshows is reached.
 import { chatJSON } from './providers.js'
+import { getQuotes, addQuotes } from './store.js'
+import { embedText, isDuplicate } from './embeddings.js'
 import { logger } from './log.js'
 
 const log = logger('generate')
@@ -65,31 +71,60 @@ Keep them on-brand, varied, and genuinely good. Do not write generic filler. Ret
 }
 
 // Generate in small batches so big counts don't overflow the model's output /
-// truncate the JSON. Each call asks for a handful; we loop until we hit `count`.
+// truncate the JSON. Each call asks for a handful; we loop until we hit `count`
+// unique slideshows (by embedding similarity against the stored quotes index).
 const BATCH = 6
+const MAX_ATTEMPTS = (count) => count + 10  // max batch API calls before giving up
 
-export async function generateSlideshows({ apiKey, model, brain, provider = 'openrouter', count = 4 }) {
+export async function generateSlideshows({ apiKey, model, brain, provider = 'openrouter', count = 4, projectId, embeddingKey }) {
   log.start(`Generating ${count} slideshow${count === 1 ? '' : 's'} with ${model}`)
   if (brain?.niche) log.info(`niche: ${brain.niche}${brain.appName ? ` · ${brain.appName}` : ''}`)
-  const raw = []
+
+  // Load stored quotes scoped to this project for dedup comparison.
+  const { entries: storedQuotes } = getQuotes()
+  const projectQuotes = storedQuotes.filter((e) => !projectId || e.projectId === projectId)
+
+  const accepted = []       // raw model outputs that passed dedup
+  const newEntries = []     // quote index entries to persist after we're done
   let safety = 0
-  while (raw.length < count && safety < count + 5) {
+
+  while (accepted.length < count && safety < MAX_ATTEMPTS(count)) {
     safety++
-    const n = Math.min(BATCH, count - raw.length)
-    log.step(`asking model for ${n} more (${raw.length}/${count} so far)…`)
+    const n = Math.min(BATCH, count - accepted.length)
+    log.step(`asking model for ${n} more (${accepted.length}/${count} unique so far)…`)
     const parsed = await chatJSON({ apiKey, model, prompt: buildPrompt(brain, n), provider })
     const batch = parsed.slideshows || []
     if (!batch.length) {
       log.warn('model returned no slideshows — stopping early')
-      break // model returned nothing — stop rather than loop forever
+      break
     }
-    raw.push(...batch)
-    log.progress(Math.min(raw.length, count), count, 'written')
+
+    // Embed all hooks in this batch in parallel (falls back to trigrams if no embeddingKey).
+    const hookTexts = batch.map((s) => s.hook || (s.slides && s.slides[0]) || '')
+    const embeddings = await Promise.all(hookTexts.map((t) => embedText(t, embeddingKey)))
+
+    for (let i = 0; i < batch.length; i++) {
+      if (accepted.length >= count) break
+      const text = hookTexts[i]
+      const embedding = embeddings[i]
+      // Check against both stored quotes and those accepted in this run.
+      const allEntries = [...projectQuotes, ...newEntries]
+      if (isDuplicate(text, embedding, allEntries)) {
+        log.warn(`deduped: "${text}"`)
+        continue
+      }
+      accepted.push(batch[i])
+      newEntries.push({ text, embedding, projectId, createdAt: new Date().toISOString() })
+    }
+
+    log.progress(accepted.length, count, 'unique')
   }
-  log.ok(`Generated ${Math.min(raw.length, count)} slideshow${raw.length === 1 ? '' : 's'}`)
+
+  if (newEntries.length) addQuotes(newEntries)
+  log.ok(`Generated ${accepted.length} unique slideshow${accepted.length === 1 ? '' : 's'}`)
 
   const stamp = Date.now()
-  return raw.slice(0, count).map((s, i) => {
+  return accepted.slice(0, count).map((s, i) => {
     const [from, to] = PALETTE[i % PALETTE.length]
     return {
       id: `q-${stamp}-${i}`,

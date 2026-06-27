@@ -50,7 +50,7 @@ const _pending = new Set()
 export async function restoreFromBlob(dir) {
   if (!TOKEN) return
   await Promise.all(
-    ['config.json', 'queue.json', 'library.json'].map(async (f) => {
+    ['config.json', 'queue.json', 'library.json', 'quotes.json'].map(async (f) => {
       try {
         const content = await pull(`slidesmith/${f}`)
         if (content == null) {

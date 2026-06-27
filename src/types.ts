@@ -44,7 +44,7 @@ export interface Project {
 export type AiProvider = 'openrouter' | 'openai' | 'deepseek' | 'claude';
 
 export interface AppConfig {
-  keys: { postbridge: string; openrouter: string; openai: string; deepseek: string; claude: string; apify: string };
+  keys: { postbridge: string; openrouter: string; openai: string; deepseek: string; claude: string; apify: string; embeddingKey: string };
   provider: AiProvider;
   model: string;
   scrapeMethod: 'direct' | 'apify';

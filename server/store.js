@@ -14,6 +14,7 @@ import { syncToBlob } from './blobSync.js'
 const DIR = process.env.SLIDESMITH_DIR || join(homedir(), '.slidesmith')
 const CONFIG_PATH = join(DIR, 'config.json')
 const QUEUE_PATH = join(DIR, 'queue.json')
+const QUOTES_PATH = join(DIR, 'quotes.json')
 
 const DEFAULT_BRAIN = {
   niche: '',
@@ -85,7 +86,7 @@ export function getConfig() {
     : projects[0].id
 
   const cfg = {
-    keys: { postbridge: '', openrouter: '', openai: '', deepseek: '', claude: '', apify: '', ...s.keys },
+    keys: { postbridge: '', openrouter: '', openai: '', deepseek: '', claude: '', apify: '', embeddingKey: '', ...s.keys },
     provider: s.provider || 'openrouter',
     model: s.model || 'openai/gpt-4o-mini',
     scrapeMethod: s.scrapeMethod || 'direct',
@@ -196,6 +197,19 @@ function removeQueueFor(projectId) {
   const m = readQueueMap()
   delete m[projectId]
   writeQueueMap(m)
+}
+
+// ── Quotes index (embedding-based dedup) ─────────────────────────────────────
+// Each entry: { text, embedding: number[]|null, projectId, createdAt }
+export function getQuotes() {
+  return readJson(QUOTES_PATH, { entries: [] })
+}
+
+export function addQuotes(newEntries) {
+  if (!newEntries.length) return
+  const q = getQuotes()
+  q.entries.push(...newEntries)
+  writeJson(QUOTES_PATH, q)
 }
 
 export const CONFIG_DIR = DIR

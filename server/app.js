@@ -125,7 +125,7 @@ app.post('/api/generate', h(async (req, res) => {
   const project = getActiveProject()
   const count = Math.min(Math.max(Math.round(Number(req.body?.count) || 4), 1), 100)
   const apiKey = keys[provider] || ''
-  const slideshows = await generateSlideshows({ apiKey, model, brain: project.brain, provider, count })
+  const slideshows = await generateSlideshows({ apiKey, model, brain: project.brain, provider, count, projectId: project.id, embeddingKey: keys.embeddingKey || '' })
 
   const packs = Array.isArray(req.body?.packs) ? req.body.packs : project.imagePacks || []
   const pool = packs.length ? listLibrary().filter((i) => packs.includes(i.pack)) : []

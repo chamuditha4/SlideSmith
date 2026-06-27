@@ -62,6 +62,7 @@ export function SettingsView({
   const [deepseek, setDeepseek] = useState(config.keys.deepseek ?? '');
   const [claude, setClaude] = useState(config.keys.claude ?? '');
   const [apify, setApify] = useState(config.keys.apify);
+  const [embeddingKey, setEmbeddingKey] = useState(config.keys.embeddingKey ?? '');
   const [scrapeMethod, setScrapeMethod] = useState<'direct' | 'apify'>(config.scrapeMethod);
   const [proxy, setProxy] = useState(config.proxy);
   const [pinterestActor, setPinterestActor] = useState(config.pinterestActor);
@@ -97,7 +98,7 @@ export function SettingsView({
     setSaveError(null);
     try {
       await onSave({
-        keys: { postbridge, openrouter, openai, deepseek, claude, apify },
+        keys: { postbridge, openrouter, openai, deepseek, claude, apify, embeddingKey },
         provider,
         model,
         scrapeMethod,
@@ -244,6 +245,18 @@ export function SettingsView({
                 <TestBadge ok={test?.ai} error={test?.errors?.ai} />
               </Field>
             )}
+            <Field
+              label={<>OpenAI key for duplicate detection <span className="text-ink-6 font-normal normal-case tracking-normal">(optional)</span></>}
+              hint="Used only for semantic dedup — not for generation. Lets you use DeepSeek or Claude for writing while still checking for similar hooks via OpenAI embeddings. Leave blank to use text-based matching instead."
+            >
+              <input
+                value={embeddingKey}
+                onChange={(e) => setEmbeddingKey(e.target.value)}
+                placeholder="sk-..."
+                className={`${inputClass} font-mono`}
+              />
+            </Field>
+
             <Field label="Pinterest scraping method" hint="How to source images from Pinterest when you click Scrape in the Library.">
               <div className="flex gap-2">
                 <Button variant={scrapeMethod === 'direct' ? 'primary' : 'secondary'} onClick={() => setScrapeMethod('direct')}>
