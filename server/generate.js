@@ -106,32 +106,52 @@ export async function generateSlideshows({ apiKey, model, brain, provider = 'ope
       break
     }
 
-    // Embed all hooks in this batch in parallel (falls back to trigrams if no embeddingKey).
-    const hookTexts = batch.map((s) => s.hook || (s.slides && s.slides[0]) || '')
-    const embeddings = await Promise.all(
-      hookTexts.map((t) =>
-        embedText(t, embeddingKey).catch((e) => {
-          if (!embedError) {
-            log.warn(`embedding API failed (${e.message}) — falling back to trigram similarity`)
-            embedError = true
-          }
-          return null
-        })
+    // For each slideshow, collect all slide texts except the last (which is always
+    // a formulaic CTA — "Save this", "Follow for more" — and repeats by design).
+    const slideSets = batch.map((s) => {
+      const slides = s.slides || []
+      return slides.length > 1 ? slides.slice(0, -1) : slides
+    })
+
+    // Embed every slide in every slideshow in parallel.
+    const now = new Date().toISOString()
+    const embeddingSets = await Promise.all(
+      slideSets.map((slides) =>
+        Promise.all(
+          slides.map((t) =>
+            embedText(t, embeddingKey).catch((e) => {
+              if (!embedError) {
+                log.warn(`embedding API failed (${e.message}) — falling back to trigram similarity`)
+                embedError = true
+              }
+              return null
+            })
+          )
+        )
       )
     )
 
     for (let i = 0; i < batch.length; i++) {
       if (accepted.length >= count) break
-      const text = hookTexts[i]
-      const embedding = embeddings[i]
-      // Check against both stored quotes and those accepted in this run.
+      const slides = slideSets[i]
+      const embeddings = embeddingSets[i]
       const allEntries = [...projectQuotes, ...newEntries]
-      if (isDuplicate(text, embedding, allEntries)) {
-        log.warn(`deduped: "${text}"`)
+
+      // Reject the whole slideshow if any individual slide is a duplicate.
+      let dupText = null
+      for (let j = 0; j < slides.length; j++) {
+        if (isDuplicate(slides[j], embeddings[j], allEntries)) { dupText = slides[j]; break }
+      }
+      if (dupText) {
+        log.warn(`deduped: "${dupText}"`)
         continue
       }
+
       accepted.push(batch[i])
-      newEntries.push({ text, embedding, projectId, createdAt: new Date().toISOString() })
+      // Store every checked slide so future generations can't reproduce any of them.
+      for (let j = 0; j < slides.length; j++) {
+        newEntries.push({ text: slides[j], embedding: embeddings[j], projectId, createdAt: now })
+      }
     }
 
     log.progress(accepted.length, count, 'unique')
